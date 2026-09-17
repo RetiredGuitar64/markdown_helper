@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.19)
 project(markdown_helper LANGUAGES CXX)
 
+# 项目使用 C++17，保证 Qt Creator 和命令行构建采用相同标准
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets PrintSupport)
 
 qt_standard_project_setup()
