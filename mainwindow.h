@@ -113,6 +113,18 @@ private:
     // 建立包含标题、正文和标签的简单搜索数据源
     void rebuildSearchIndex();
 
+    // 只更新一篇笔记在树中的节点
+    void updateNoteTreeItem(const Note &note);
+
+    // 只更新一篇笔记在全文搜索模型中的条目
+    void updateSearchItem(const Note &note, const QString &content);
+
+    // 根据编号查找树中的笔记节点
+    QStandardItem *findNoteTreeItem(const QString &noteId) const;
+
+    // 根据编号查找搜索数据源中的笔记条目
+    QStandardItem *findSearchItem(const QString &noteId) const;
+
     // 收集全部标签并刷新标签筛选下拉框
     void rebuildTagChoices();
 

@@ -404,6 +404,119 @@ void MainWindow::rebuildSearchIndex()
     searchProxyModel->setFilterFixedString(searchEdit->text().trimmed());
 }
 
+QStandardItem *MainWindow::findNoteTreeItem(const QString &noteId) const
+{
+    if (noteTreeModel == nullptr || noteId.isEmpty()) {
+        return nullptr;
+    }
+
+    // 笔记树固定为文件夹和笔记两层
+    for (int folderRow = 0; folderRow < noteTreeModel->rowCount(); ++folderRow) {
+        QStandardItem *folderItem = noteTreeModel->item(folderRow);
+        for (int noteRow = 0; noteRow < folderItem->rowCount(); ++noteRow) {
+            QStandardItem *noteItem = folderItem->child(noteRow);
+            if (noteItem->data(NoteIdRole).toString() == noteId) {
+                return noteItem;
+            }
+        }
+    }
+
+    return nullptr;
+}
+
+QStandardItem *MainWindow::findSearchItem(const QString &noteId) const
+{
+    if (searchSourceModel == nullptr || noteId.isEmpty()) {
+        return nullptr;
+    }
+
+    // 搜索源模型是单层列表，只需检查每一行
+    for (int row = 0; row < searchSourceModel->rowCount(); ++row) {
+        QStandardItem *item = searchSourceModel->item(row);
+        if (item->data(NoteIdRole).toString() == noteId) {
+            return item;
+        }
+    }
+
+    return nullptr;
+}
+
+void MainWindow::updateNoteTreeItem(const Note &note)
+{
+    if (noteTreeModel == nullptr) {
+        return;
+    }
+
+    const QString selectedTag = tagFilterCombo->currentText();
+    const bool shouldBeVisible = selectedTag == QStringLiteral("全部标签")
+        || selectedTag.isEmpty() || note.tags.contains(selectedTag);
+    const QString folderName = note.folder.isEmpty()
+        ? QStringLiteral("未分类") : note.folder;
+    QStandardItem *oldItem = findNoteTreeItem(note.id);
+
+    // 标签过滤后不应显示时只移除这一条笔记
+    if (!shouldBeVisible) {
+        if (oldItem != nullptr && oldItem->parent() != nullptr) {
+            oldItem->parent()->removeRow(oldItem->row());
+        }
+        return;
+    }
+
+    // 文件夹没有变化时直接修改标题即可
+    if (oldItem != nullptr && oldItem->parent() != nullptr
+        && oldItem->parent()->text() == folderName) {
+        oldItem->setText(note.title);
+        selectNoteInTree(note.id);
+        return;
+    }
+
+    // 移动或重新显示前先移除旧位置的节点
+    if (oldItem != nullptr && oldItem->parent() != nullptr) {
+        oldItem->parent()->removeRow(oldItem->row());
+    }
+
+    // 找到目标文件夹并只添加当前笔记节点
+    for (int row = 0; row < noteTreeModel->rowCount(); ++row) {
+        QStandardItem *folderItem = noteTreeModel->item(row);
+        if (folderItem->text() == folderName) {
+            QStandardItem *noteItem = new QStandardItem(note.title);
+            noteItem->setEditable(false);
+            noteItem->setData(NoteItem, ItemTypeRole);
+            noteItem->setData(note.id, NoteIdRole);
+            folderItem->appendRow(noteItem);
+            noteTreeView->setCurrentIndex(noteItem->index());
+            return;
+        }
+    }
+}
+
+void MainWindow::updateSearchItem(const Note &note, const QString &content)
+{
+    if (searchSourceModel == nullptr) {
+        return;
+    }
+
+    QStandardItem *item = findSearchItem(note.id);
+    if (item == nullptr) {
+        item = new QStandardItem;
+        item->setEditable(false);
+        searchSourceModel->appendRow(item);
+    }
+
+    const QString folder = note.folder.isEmpty()
+        ? QStringLiteral("未分类") : note.folder;
+    item->setText(QStringLiteral("%1  [%2]").arg(note.title, folder));
+    item->setData(note.id, NoteIdRole);
+
+    // 只重新组合这一篇笔记的搜索内容
+    const QString searchableText = note.title + QLatin1Char('\n')
+        + content + QLatin1Char('\n') + note.tags.join(QLatin1Char(' '));
+    item->setData(searchableText, SearchTextRole);
+
+    // 重新设置当前关键字可让结果数量立即反映这一条数据的变化
+    searchProxyModel->setFilterFixedString(searchEdit->text().trimmed());
+}
+
 void MainWindow::rebuildTagChoices()
 {
     const QString previousChoice = tagFilterCombo->currentText();
@@ -418,6 +531,13 @@ void MainWindow::rebuildTagChoices()
         }
     }
     allTags.sort(Qt::CaseInsensitive);
+
+    // 当前筛选标签暂时没有笔记时仍保留选择，避免整棵树切回全部
+    if (!previousChoice.isEmpty()
+        && previousChoice != QStringLiteral("全部标签")
+        && !allTags.contains(previousChoice)) {
+        allTags.append(previousChoice);
+    }
 
     // 阻止刷新下拉内容时再次递归刷新笔记树
     const QSignalBlocker blocker(tagFilterCombo);
@@ -501,20 +621,10 @@ QString MainWindow::selectedNoteId() const
 
 void MainWindow::selectNoteInTree(const QString &noteId)
 {
-    if (noteTreeModel == nullptr || noteId.isEmpty()) {
-        return;
-    }
-
-    // 树只有文件夹和笔记两层，直接遍历比递归函数更容易理解
-    for (int folderRow = 0; folderRow < noteTreeModel->rowCount(); ++folderRow) {
-        QStandardItem *folderItem = noteTreeModel->item(folderRow);
-        for (int noteRow = 0; noteRow < folderItem->rowCount(); ++noteRow) {
-            QStandardItem *noteItem = folderItem->child(noteRow);
-            if (noteItem->data(NoteIdRole).toString() == noteId) {
-                noteTreeView->setCurrentIndex(noteItem->index());
-                return;
-            }
-        }
+    // 复用统一查找函数恢复当前选择
+    QStandardItem *noteItem = findNoteTreeItem(noteId);
+    if (noteItem != nullptr) {
+        noteTreeView->setCurrentIndex(noteItem->index());
     }
 }
 
@@ -543,10 +653,10 @@ void MainWindow::createNote()
         return;
     }
 
-    // 新增数据时重建树和搜索模型，保证新条目立即可见
+    // 新增数据时重建树结构，并只追加这一条搜索数据
     const QString newNoteId = note->id;
     rebuildNoteTree();
-    rebuildSearchIndex();
+    updateSearchItem(*note, QString());
     rebuildTagChoices();
     loadNote(newNoteId);
 }
@@ -625,9 +735,9 @@ void MainWindow::saveCurrentNote()
         return;
     }
 
-    // 这一版先保持原来的模型刷新行为，后续再改成单条更新
-    rebuildNoteTree();
-    rebuildSearchIndex();
+    // 自动保存只更新当前笔记对应的树节点和搜索条目
+    updateNoteTreeItem(*note);
+    updateSearchItem(*note, markdownEditor->toPlainText());
     rebuildTagChoices();
     ui->statusbar->showMessage(QStringLiteral("已自动保存"), 1800);
 }
