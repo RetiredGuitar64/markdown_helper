@@ -9,7 +9,6 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFontDatabase>
-#include <QFormLayout>
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
@@ -28,7 +27,6 @@
 #include <QTimer>
 #include <QToolBar>
 #include <QTreeView>
-#include <QVBoxLayout>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -108,95 +106,24 @@ void MainWindow::closeEvent(QCloseEvent *event)
 
 void MainWindow::setupInterface()
 {
-    // 设置应用标题和适合编辑工作的初始大小
-    setWindowTitle(QStringLiteral("Markdown 笔记管理器"));
-    resize(1180, 720);
-    setMinimumSize(900, 560);
-
-    // 最外层布局只放置一个横向分割器
-    auto *mainLayout = new QVBoxLayout(ui->centralwidget);
-    mainLayout->setContentsMargins(8, 8, 8, 8);
-
-    // 分割器允许用户自由调整导航、编辑和预览的宽度
-    auto *mainSplitter = new QSplitter(Qt::Horizontal, ui->centralwidget);
-    mainLayout->addWidget(mainSplitter);
-
-    // 左侧区域放置搜索框和笔记树
-    auto *navigationWidget = new QWidget(mainSplitter);
-    auto *navigationLayout = new QVBoxLayout(navigationWidget);
-    navigationLayout->setContentsMargins(0, 0, 0, 0);
-
-    auto *navigationTitle = new QLabel(QStringLiteral("笔记列表"), navigationWidget);
-    navigationTitle->setObjectName(QStringLiteral("sectionTitle"));
-    navigationLayout->addWidget(navigationTitle);
-
-    searchEdit = new QLineEdit(navigationWidget);
-    searchEdit->setPlaceholderText(QStringLiteral("搜索标题或正文"));
-    searchEdit->setClearButtonEnabled(true);
-    navigationLayout->addWidget(searchEdit);
-
-    tagFilterCombo = new QComboBox(navigationWidget);
-    tagFilterCombo->setToolTip(QStringLiteral("按标签筛选笔记树"));
-    tagFilterCombo->addItem(QStringLiteral("全部标签"));
-    navigationLayout->addWidget(tagFilterCombo);
-
-    // 搜索结果默认隐藏，仅在输入关键字时占用空间
-    searchResultView = new QListView(navigationWidget);
-    searchResultView->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    searchResultView->setAlternatingRowColors(true);
-    searchResultView->setMaximumHeight(180);
-    searchResultView->hide();
-    navigationLayout->addWidget(searchResultView);
-
-    noteTreeView = new QTreeView(navigationWidget);
-    noteTreeView->setHeaderHidden(true);
-    noteTreeView->setAlternatingRowColors(true);
-    navigationLayout->addWidget(noteTreeView, 1);
-
-    // 中间区域由标题、标签和源码编辑器组成
-    auto *editorWidget = new QWidget(mainSplitter);
-    auto *editorLayout = new QVBoxLayout(editorWidget);
-    editorLayout->setContentsMargins(8, 0, 8, 0);
-
-    auto *editorTitle = new QLabel(QStringLiteral("Markdown 编辑"), editorWidget);
-    editorTitle->setObjectName(QStringLiteral("sectionTitle"));
-    editorLayout->addWidget(editorTitle);
-
-    auto *informationLayout = new QFormLayout;
-    informationLayout->setContentsMargins(0, 0, 0, 0);
-
-    titleEdit = new QLineEdit(editorWidget);
-    titleEdit->setPlaceholderText(QStringLiteral("笔记标题"));
-    informationLayout->addRow(QStringLiteral("标题"), titleEdit);
-
-    tagEdit = new QLineEdit(editorWidget);
-    tagEdit->setPlaceholderText(QStringLiteral("学习, Qt, 随笔"));
-    informationLayout->addRow(QStringLiteral("标签"), tagEdit);
-    editorLayout->addLayout(informationLayout);
-
-    markdownEditor = new QPlainTextEdit(editorWidget);
-    markdownEditor->setPlaceholderText(QStringLiteral("在这里输入 Markdown 内容"));
-    markdownEditor->setTabStopDistance(32);
-    editorLayout->addWidget(markdownEditor, 1);
-
-    // 右侧区域只负责显示渲染后的内容
-    auto *previewWidget = new QWidget(mainSplitter);
-    auto *previewLayout = new QVBoxLayout(previewWidget);
-    previewLayout->setContentsMargins(8, 0, 0, 0);
-
-    auto *previewTitle = new QLabel(QStringLiteral("实时预览"), previewWidget);
-    previewTitle->setObjectName(QStringLiteral("sectionTitle"));
-    previewLayout->addWidget(previewTitle);
-
-    previewBrowser = new QTextBrowser(previewWidget);
-    previewBrowser->setOpenExternalLinks(true);
-    previewLayout->addWidget(previewBrowser, 1);
+    // Designer 文件负责创建控件，这里保存常用控件指针便于后续操作
+    searchEdit = ui->searchEdit;
+    tagFilterCombo = ui->tagFilterCombo;
+    searchResultView = ui->searchResultView;
+    noteTreeView = ui->noteTreeView;
+    titleEdit = ui->titleEdit;
+    tagEdit = ui->tagEdit;
+    markdownEditor = ui->markdownEditor;
+    previewBrowser = ui->previewBrowser;
 
     // 让编辑区和预览区占用较多空间
-    mainSplitter->setStretchFactor(0, 1);
-    mainSplitter->setStretchFactor(1, 2);
-    mainSplitter->setStretchFactor(2, 2);
-    mainSplitter->setSizes({220, 470, 470});
+    ui->mainSplitter->setStretchFactor(0, 1);
+    ui->mainSplitter->setStretchFactor(1, 2);
+    ui->mainSplitter->setStretchFactor(2, 2);
+    ui->mainSplitter->setSizes({220, 470, 470});
+
+    // 设置源码编辑器中制表符的显示宽度
+    markdownEditor->setTabStopDistance(32);
 
     // 状态栏右侧常驻显示当前字符数
     wordCountLabel = new QLabel(QStringLiteral("字符数: 0"), this);
@@ -277,7 +204,8 @@ void MainWindow::setupStyle()
 
     // 少量样式用于区分标题并改善输入框间距
     setStyleSheet(QStringLiteral(
-        "QLabel#sectionTitle { font-size: 16px; font-weight: bold; padding: 4px 0; }"
+        "QLabel#sectionTitle, QLabel#editorTitle, QLabel#previewTitle "
+        "{ font-size: 16px; font-weight: bold; padding: 4px 0; }"
         "QLineEdit { padding: 5px; }"
         "QTreeView, QPlainTextEdit, QTextBrowser { border: 1px solid #c8c8c8; }"));
 }
