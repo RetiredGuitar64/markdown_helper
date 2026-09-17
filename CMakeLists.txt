@@ -12,6 +12,9 @@ qt_standard_project_setup()
 qt_add_executable(markdown_helper
     WIN32 MACOSX_BUNDLE
     main.cpp
+    note.h
+    notestorage.cpp
+    notestorage.h
     mainwindow.cpp
     mainwindow.h
     mainwindow.ui

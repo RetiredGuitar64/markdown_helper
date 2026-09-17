@@ -1,9 +1,9 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
+#include "notestorage.h"
+
 #include <QMainWindow>
-#include <QStringList>
-#include <QVector>
 
 class QCloseEvent;
 class QComboBox;
@@ -80,17 +80,6 @@ private slots:
     void exportCurrentNoteAsPdf();
 
 private:
-    // 一篇笔记在内存中的基本信息
-    struct NoteRecord
-    {
-        QString id;
-        QString title;
-        QString folder;
-        QStringList tags;
-        QString fileName;
-        QString updatedAt;
-    };
-
     // 自定义数据角色用于区分文件夹和笔记
     enum ItemRole
     {
@@ -118,9 +107,6 @@ private:
     // 从本地 JSON 和 Markdown 文件读取全部笔记
     void loadNotes();
 
-    // 将文件夹和笔记元数据保存为 JSON
-    void saveMetadata();
-
     // 根据内存数据重新生成左侧树形列表
     void rebuildNoteTree();
 
@@ -132,18 +118,6 @@ private:
 
     // 在编辑区载入指定编号的笔记
     void loadNote(const QString &noteId);
-
-    // 创建首次运行时显示的欢迎笔记
-    void createWelcomeNote();
-
-    // 返回应用保存数据的文件夹路径
-    QString dataDirectoryPath() const;
-
-    // 返回指定 Markdown 文件的完整路径
-    QString noteFilePath(const QString &fileName) const;
-
-    // 根据编号查找笔记在数组中的位置
-    int findNoteIndex(const QString &noteId) const;
 
     // 获取当前树节点代表的文件夹名称
     QString selectedFolderName() const;
@@ -202,11 +176,8 @@ private:
     // 延迟自动保存使用的单次计时器
     QTimer *saveTimer;
 
-    // 保存全部笔记的轻量数据数组
-    QVector<NoteRecord> notes;
-
-    // 保存用户创建的文件夹名称
-    QStringList folders;
+    // 负责笔记元数据和 Markdown 文件的本地存储
+    NoteStorage storage;
 
     // 当前正在编辑的笔记编号
     QString currentNoteId;
