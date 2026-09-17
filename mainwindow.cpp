@@ -3,6 +3,7 @@
 
 #include <QAction>
 #include <QCloseEvent>
+#include <QComboBox>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -14,10 +15,13 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListView>
 #include <QMenu>
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QSaveFile>
+#include <QSignalBlocker>
+#include <QSortFilterProxyModel>
 #include <QSplitter>
 #include <QStandardItemModel>
 #include <QStandardPaths>
@@ -33,13 +37,17 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow)
     , searchEdit(nullptr)
+    , tagFilterCombo(nullptr)
     , noteTreeView(nullptr)
+    , searchResultView(nullptr)
     , titleEdit(nullptr)
     , tagEdit(nullptr)
     , markdownEditor(nullptr)
     , previewBrowser(nullptr)
     , wordCountLabel(nullptr)
     , noteTreeModel(nullptr)
+    , searchSourceModel(nullptr)
+    , searchProxyModel(nullptr)
     , saveTimer(nullptr)
     , loadingNote(false)
 {
@@ -71,6 +79,18 @@ MainWindow::MainWindow(QWidget *parent)
     // 双击树中的笔记时将它载入编辑区
     connect(noteTreeView, &QTreeView::doubleClicked,
             this, &MainWindow::openTreeItem);
+    connect(noteTreeView, &QTreeView::clicked,
+            this, &MainWindow::openTreeItem);
+
+    // 搜索文字和标签选项改变时马上刷新左侧显示
+    connect(searchEdit, &QLineEdit::textChanged,
+            this, &MainWindow::updateSearch);
+    connect(searchResultView, &QListView::clicked,
+            this, &MainWindow::openSearchResult);
+    connect(searchResultView, &QListView::doubleClicked,
+            this, &MainWindow::openSearchResult);
+    connect(tagFilterCombo, &QComboBox::currentTextChanged,
+            this, &MainWindow::filterTreeByTag);
 
     // 最后读取磁盘数据并显示上次保存的笔记
     loadNotes();
@@ -117,6 +137,19 @@ void MainWindow::setupInterface()
     searchEdit->setPlaceholderText(QStringLiteral("搜索标题或正文"));
     searchEdit->setClearButtonEnabled(true);
     navigationLayout->addWidget(searchEdit);
+
+    tagFilterCombo = new QComboBox(navigationWidget);
+    tagFilterCombo->setToolTip(QStringLiteral("按标签筛选笔记树"));
+    tagFilterCombo->addItem(QStringLiteral("全部标签"));
+    navigationLayout->addWidget(tagFilterCombo);
+
+    // 搜索结果默认隐藏，仅在输入关键字时占用空间
+    searchResultView = new QListView(navigationWidget);
+    searchResultView->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    searchResultView->setAlternatingRowColors(true);
+    searchResultView->setMaximumHeight(180);
+    searchResultView->hide();
+    navigationLayout->addWidget(searchResultView);
 
     noteTreeView = new QTreeView(navigationWidget);
     noteTreeView->setHeaderHidden(true);
@@ -409,13 +442,19 @@ void MainWindow::createWelcomeNote()
 
 void MainWindow::rebuildNoteTree()
 {
-    // 重建模型前清理旧对象，视图会自动切换到新模型
-    if (noteTreeModel != nullptr) {
-        noteTreeModel->deleteLater();
+    // 模型只创建一次，后续刷新时清除其中的旧节点
+    if (noteTreeModel == nullptr) {
+        noteTreeModel = new QStandardItemModel(this);
+        noteTreeView->setModel(noteTreeModel);
+    } else {
+        noteTreeModel->clear();
     }
 
-    noteTreeModel = new QStandardItemModel(this);
     noteTreeModel->setHorizontalHeaderLabels({QStringLiteral("笔记")});
+
+    // 全部标签表示不进行标签过滤
+    const QString selectedTag = tagFilterCombo == nullptr
+        ? QStringLiteral("全部标签") : tagFilterCombo->currentText();
 
     // 未分类节点始终存在，方便接收没有文件夹的笔记
     QStringList visibleFolders = folders;
@@ -432,7 +471,11 @@ void MainWindow::rebuildNoteTree()
         for (const NoteRecord &note : std::as_const(notes)) {
             const QString actualFolder = note.folder.isEmpty()
                 ? QStringLiteral("未分类") : note.folder;
-            if (actualFolder == folderName) {
+
+            // 选中具体标签时只显示含有该标签的笔记
+            const bool tagMatches = selectedTag == QStringLiteral("全部标签")
+                || selectedTag.isEmpty() || note.tags.contains(selectedTag);
+            if (actualFolder == folderName && tagMatches) {
                 QStandardItem *noteItem = new QStandardItem(note.title);
                 noteItem->setEditable(false);
                 noteItem->setData(NoteItem, ItemTypeRole);
@@ -444,8 +487,79 @@ void MainWindow::rebuildNoteTree()
         noteTreeModel->appendRow(folderItem);
     }
 
-    noteTreeView->setModel(noteTreeModel);
     noteTreeView->expandAll();
+
+    // 树刷新通常表示数据发生变化，搜索和标签也需要同步
+    rebuildSearchIndex();
+    rebuildTagChoices();
+}
+
+void MainWindow::rebuildSearchIndex()
+{
+    // 搜索数据源为每篇笔记保存一个扁平条目
+    if (searchSourceModel == nullptr) {
+        searchSourceModel = new QStandardItemModel(this);
+    } else {
+        searchSourceModel->clear();
+    }
+
+    for (const NoteRecord &note : std::as_const(notes)) {
+        QFile contentFile(noteFilePath(note.fileName));
+        QString content;
+        if (contentFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            content = QString::fromUtf8(contentFile.readAll());
+        }
+
+        const QString folder = note.folder.isEmpty()
+            ? QStringLiteral("未分类") : note.folder;
+        QStandardItem *item = new QStandardItem(
+            QStringLiteral("%1  [%2]").arg(note.title, folder));
+        item->setEditable(false);
+        item->setData(note.id, NoteIdRole);
+
+        // 代理模型会在这段组合文字中执行不区分大小写的子串匹配
+        const QString searchableText = note.title + QLatin1Char('\n')
+            + content + QLatin1Char('\n') + note.tags.join(QLatin1Char(' '));
+        item->setData(searchableText, SearchTextRole);
+        searchSourceModel->appendRow(item);
+    }
+
+    if (searchProxyModel == nullptr) {
+        searchProxyModel = new QSortFilterProxyModel(this);
+        searchProxyModel->setFilterCaseSensitivity(Qt::CaseInsensitive);
+        searchProxyModel->setFilterRole(SearchTextRole);
+        searchResultView->setModel(searchProxyModel);
+    }
+
+    searchProxyModel->setSourceModel(searchSourceModel);
+
+    // 保持当前搜索框中的关键字继续生效
+    searchProxyModel->setFilterFixedString(searchEdit->text().trimmed());
+}
+
+void MainWindow::rebuildTagChoices()
+{
+    const QString previousChoice = tagFilterCombo->currentText();
+    QStringList allTags;
+
+    // 使用 contains 去重可以保持标签第一次出现时的自然顺序
+    for (const NoteRecord &note : std::as_const(notes)) {
+        for (const QString &tag : note.tags) {
+            if (!tag.isEmpty() && !allTags.contains(tag)) {
+                allTags.append(tag);
+            }
+        }
+    }
+    allTags.sort(Qt::CaseInsensitive);
+
+    // 阻止刷新下拉内容时再次递归刷新笔记树
+    const QSignalBlocker blocker(tagFilterCombo);
+    tagFilterCombo->clear();
+    tagFilterCombo->addItem(QStringLiteral("全部标签"));
+    tagFilterCombo->addItems(allTags);
+
+    const int previousIndex = tagFilterCombo->findText(previousChoice);
+    tagFilterCombo->setCurrentIndex(previousIndex >= 0 ? previousIndex : 0);
 }
 
 int MainWindow::findNoteIndex(const QString &noteId) const
@@ -659,6 +773,40 @@ void MainWindow::setEditorEnabled(bool enabled)
     tagEdit->setEnabled(enabled);
     markdownEditor->setEnabled(enabled);
     previewBrowser->setEnabled(enabled);
+}
+
+void MainWindow::updateSearch(const QString &keyword)
+{
+    if (searchProxyModel == nullptr) {
+        return;
+    }
+
+    const QString trimmedKeyword = keyword.trimmed();
+    searchProxyModel->setFilterFixedString(trimmedKeyword);
+
+    // 没有关键字时隐藏结果列表，把空间还给笔记树
+    searchResultView->setVisible(!trimmedKeyword.isEmpty());
+    if (!trimmedKeyword.isEmpty()) {
+        ui->statusbar->showMessage(
+            QStringLiteral("找到 %1 篇笔记").arg(searchProxyModel->rowCount()));
+    } else {
+        ui->statusbar->showMessage(QStringLiteral("准备就绪"));
+    }
+}
+
+void MainWindow::openSearchResult(const QModelIndex &index)
+{
+    // 自定义角色会由代理模型自动映射到原始条目
+    const QString noteId = index.data(NoteIdRole).toString();
+    if (!noteId.isEmpty()) {
+        loadNote(noteId);
+    }
+}
+
+void MainWindow::filterTreeByTag()
+{
+    // 标签改变后重新创建可见树节点即可
+    rebuildNoteTree();
 }
 
 void MainWindow::renameSelectedItem()

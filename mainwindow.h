@@ -6,9 +6,12 @@
 #include <QVector>
 
 class QCloseEvent;
+class QComboBox;
 class QLabel;
 class QLineEdit;
+class QListView;
 class QPlainTextEdit;
+class QSortFilterProxyModel;
 class QStandardItem;
 class QStandardItemModel;
 class QTextBrowser;
@@ -61,6 +64,15 @@ private slots:
     // 将当前选中的笔记移动到其他文件夹
     void moveSelectedNote();
 
+    // 根据搜索框内容过滤全文搜索结果
+    void updateSearch(const QString &keyword);
+
+    // 打开全文搜索结果中选中的笔记
+    void openSearchResult(const QModelIndex &index);
+
+    // 根据下拉框选择的标签过滤笔记树
+    void filterTreeByTag();
+
 private:
     // 一篇笔记在内存中的基本信息
     struct NoteRecord
@@ -106,6 +118,12 @@ private:
     // 根据内存数据重新生成左侧树形列表
     void rebuildNoteTree();
 
+    // 建立包含标题、正文和标签的简单搜索数据源
+    void rebuildSearchIndex();
+
+    // 收集全部标签并刷新标签筛选下拉框
+    void rebuildTagChoices();
+
     // 在编辑区载入指定编号的笔记
     void loadNote(const QString &noteId);
 
@@ -136,8 +154,14 @@ private:
     // 左侧用于查找笔记的输入框
     QLineEdit *searchEdit;
 
+    // 标签下拉框用于按一个标签筛选笔记树
+    QComboBox *tagFilterCombo;
+
     // 左侧用于显示文件夹和笔记的树
     QTreeView *noteTreeView;
+
+    // 搜索框有内容时显示匹配的笔记列表
+    QListView *searchResultView;
 
     // 编辑区上方显示当前笔记标题
     QLineEdit *titleEdit;
@@ -156,6 +180,12 @@ private:
 
     // 管理左侧文件夹和笔记节点的数据模型
     QStandardItemModel *noteTreeModel;
+
+    // 全文搜索使用的原始扁平模型
+    QStandardItemModel *searchSourceModel;
+
+    // 代理模型负责根据搜索关键字过滤原始模型
+    QSortFilterProxyModel *searchProxyModel;
 
     // 延迟自动保存使用的单次计时器
     QTimer *saveTimer;
