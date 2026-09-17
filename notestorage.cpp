@@ -119,21 +119,9 @@ const QStringList &NoteStorage::folders() const
     return folderList;
 }
 
-Note *NoteStorage::findNote(const QString &noteId)
-{
-    // 当前项目数据量不大，简单线性查找已经足够
-    for (Note &note : noteList) {
-        if (note.id == noteId) {
-            return &note;
-        }
-    }
-
-    return nullptr;
-}
-
 const Note *NoteStorage::findNote(const QString &noteId) const
 {
-    // const 重载用于不需要修改笔记的界面操作
+    // 当前项目数据量不大，简单线性查找已经足够
     for (const Note &note : noteList) {
         if (note.id == noteId) {
             return &note;
@@ -143,7 +131,7 @@ const Note *NoteStorage::findNote(const QString &noteId) const
     return nullptr;
 }
 
-Note *NoteStorage::addNote(const QString &title, const QString &folder)
+const Note *NoteStorage::addNote(const QString &title, const QString &folder)
 {
     Note note;
     note.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -162,6 +150,50 @@ Note *NoteStorage::addNote(const QString &title, const QString &folder)
     }
 
     return &createdNote;
+}
+
+bool NoteStorage::updateNote(const QString &noteId, const QString &title,
+                             const QStringList &tags, const QString &content)
+{
+    // 在存储类内部查找可修改的数据项
+    for (Note &note : noteList) {
+        if (note.id == noteId) {
+            note.title = title;
+            note.tags = tags;
+            note.updatedAt = QDateTime::currentDateTime().toString(Qt::ISODate);
+
+            // 正文成功写入后再更新 JSON 元数据
+            return saveNoteContent(note, content) && saveMetadata();
+        }
+    }
+
+    return false;
+}
+
+bool NoteStorage::renameNote(const QString &noteId, const QString &newTitle)
+{
+    for (Note &note : noteList) {
+        if (note.id == noteId) {
+            note.title = newTitle;
+            note.updatedAt = QDateTime::currentDateTime().toString(Qt::ISODate);
+            return saveMetadata();
+        }
+    }
+
+    return false;
+}
+
+bool NoteStorage::moveNote(const QString &noteId, const QString &folder)
+{
+    for (Note &note : noteList) {
+        if (note.id == noteId) {
+            note.folder = folder;
+            note.updatedAt = QDateTime::currentDateTime().toString(Qt::ISODate);
+            return saveMetadata();
+        }
+    }
+
+    return false;
 }
 
 bool NoteStorage::removeNote(const QString &noteId)

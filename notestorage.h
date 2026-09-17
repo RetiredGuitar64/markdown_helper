@@ -22,14 +22,21 @@ public:
     // 返回全部文件夹供界面模型读取
     const QStringList &folders() const;
 
-    // 根据编号查找可修改的笔记
-    Note *findNote(const QString &noteId);
-
     // 根据编号查找只读笔记
     const Note *findNote(const QString &noteId) const;
 
     // 创建笔记并同时生成空 Markdown 文件
-    Note *addNote(const QString &title, const QString &folder);
+    const Note *addNote(const QString &title, const QString &folder);
+
+    // 更新一篇笔记的标题、标签和正文
+    bool updateNote(const QString &noteId, const QString &title,
+                    const QStringList &tags, const QString &content);
+
+    // 修改一篇笔记的标题
+    bool renameNote(const QString &noteId, const QString &newTitle);
+
+    // 修改一篇笔记所属的文件夹
+    bool moveNote(const QString &noteId, const QString &folder);
 
     // 删除笔记元数据和对应的 Markdown 文件
     bool removeNote(const QString &noteId);

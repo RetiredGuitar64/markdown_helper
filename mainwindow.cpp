@@ -4,7 +4,6 @@
 #include <QAction>
 #include <QCloseEvent>
 #include <QComboBox>
-#include <QDateTime>
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -574,7 +573,7 @@ void MainWindow::createNote()
 
     const QString folder = targetFolder == QStringLiteral("未分类")
         ? QString() : targetFolder;
-    Note *note = storage.addNote(title, folder);
+    const Note *note = storage.addNote(title, folder);
     if (note == nullptr) {
         QMessageBox::warning(this, QStringLiteral("创建失败"),
                              QStringLiteral("无法创建笔记文件"));
@@ -631,7 +630,7 @@ void MainWindow::scheduleSave()
 
 void MainWindow::saveCurrentNote()
 {
-    Note *note = storage.findNote(currentNoteId);
+    const Note *note = storage.findNote(currentNoteId);
     if (note == nullptr || loadingNote) {
         return;
     }
@@ -639,27 +638,32 @@ void MainWindow::saveCurrentNote()
     saveTimer->stop();
 
     // 空标题自动恢复为未命名，保证树中始终有可见文字
-    note->title = titleEdit->text().trimmed();
-    if (note->title.isEmpty()) {
-        note->title = QStringLiteral("未命名笔记");
+    QString title = titleEdit->text().trimmed();
+    if (title.isEmpty()) {
+        title = QStringLiteral("未命名笔记");
     }
 
     // 英文逗号和中文逗号都可以用于分隔多个标签
     QString normalizedTags = tagEdit->text();
     normalizedTags.replace(QChar(0xFF0C), QLatin1Char(','));
-    note->tags.clear();
+    QStringList tags;
     for (const QString &part : normalizedTags.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
         const QString tag = part.trimmed();
-        if (!tag.isEmpty() && !note->tags.contains(tag)) {
-            note->tags.append(tag);
+        if (!tag.isEmpty() && !tags.contains(tag)) {
+            tags.append(tag);
         }
     }
-    note->updatedAt = QDateTime::currentDateTime().toString(Qt::ISODate);
 
     // 正文与 JSON 的实际写入统一交给存储对象
-    if (!storage.saveNoteContent(*note, markdownEditor->toPlainText())
-        || !storage.saveMetadata()) {
+    if (!storage.updateNote(currentNoteId, title, tags,
+                            markdownEditor->toPlainText())) {
         ui->statusbar->showMessage(QStringLiteral("正文保存失败"), 3000);
+        return;
+    }
+
+    // 保存后重新取得稳定的只读指针
+    note = storage.findNote(currentNoteId);
+    if (note == nullptr) {
         return;
     }
 
@@ -831,22 +835,22 @@ void MainWindow::renameSelectedItem()
     }
 
     if (itemType == NoteItem) {
-        Note *note = storage.findNote(currentIndex.data(NoteIdRole).toString());
+        const QString noteId = currentIndex.data(NoteIdRole).toString();
+        const Note *note = storage.findNote(noteId);
         if (note == nullptr) {
             return;
         }
 
+        if (!storage.renameNote(noteId, newName)) {
+            ui->statusbar->showMessage(QStringLiteral("重命名保存失败"), 3000);
+            return;
+        }
+
         // 同步更新当前打开笔记的标题输入框
-        note->title = newName;
         if (note->id == currentNoteId) {
             loadingNote = true;
             titleEdit->setText(newName);
             loadingNote = false;
-        }
-
-        if (!storage.saveMetadata()) {
-            ui->statusbar->showMessage(QStringLiteral("重命名保存失败"), 3000);
-            return;
         }
     } else if (itemType == FolderItem) {
         // 固定的未分类节点不能重命名
@@ -951,7 +955,7 @@ void MainWindow::deleteSelectedItem()
 void MainWindow::moveSelectedNote()
 {
     const QString noteId = selectedNoteId();
-    Note *note = storage.findNote(noteId);
+    const Note *note = storage.findNote(noteId);
     if (note == nullptr) {
         QMessageBox::information(this, QStringLiteral("提示"),
                                  QStringLiteral("请先选择一篇笔记"));
@@ -974,9 +978,9 @@ void MainWindow::moveSelectedNote()
         return;
     }
 
-    note->folder = targetFolder == QStringLiteral("未分类")
+    const QString folder = targetFolder == QStringLiteral("未分类")
         ? QString() : targetFolder;
-    if (!storage.saveMetadata()) {
+    if (!storage.moveNote(noteId, folder)) {
         ui->statusbar->showMessage(QStringLiteral("移动保存失败"), 3000);
         return;
     }
