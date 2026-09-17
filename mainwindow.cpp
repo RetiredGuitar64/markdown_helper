@@ -7,6 +7,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QFileDialog>
 #include <QFontDatabase>
 #include <QFormLayout>
 #include <QInputDialog>
@@ -19,6 +20,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QPrinter>
 #include <QSaveFile>
 #include <QSignalBlocker>
 #include <QSortFilterProxyModel>
@@ -231,6 +233,18 @@ void MainWindow::setupActions()
     connect(saveAction, &QAction::triggered, this, &MainWindow::saveCurrentNote);
     fileMenu->addAction(saveAction);
     toolBar->addAction(saveAction);
+
+    fileMenu->addSeparator();
+
+    QAction *exportHtmlAction = new QAction(QStringLiteral("导出为 HTML"), this);
+    connect(exportHtmlAction, &QAction::triggered,
+            this, &MainWindow::exportCurrentNoteAsHtml);
+    fileMenu->addAction(exportHtmlAction);
+
+    QAction *exportPdfAction = new QAction(QStringLiteral("导出为 PDF"), this);
+    connect(exportPdfAction, &QAction::triggered,
+            this, &MainWindow::exportCurrentNoteAsPdf);
+    fileMenu->addAction(exportPdfAction);
 
     // 编辑菜单提供当前树节点的管理操作
     QMenu *editMenu = ui->menubar->addMenu(QStringLiteral("编辑"));
@@ -807,6 +821,103 @@ void MainWindow::filterTreeByTag()
 {
     // 标签改变后重新创建可见树节点即可
     rebuildNoteTree();
+}
+
+QString MainWindow::safeExportFileName() const
+{
+    QString fileName = titleEdit->text().trimmed();
+    if (fileName.isEmpty()) {
+        fileName = QStringLiteral("未命名笔记");
+    }
+
+    // 替换各平台文件名中常见的非法字符
+    const QString invalidCharacters = QStringLiteral("\\/:*?\"<>|");
+    for (const QChar character : invalidCharacters) {
+        fileName.replace(character, QLatin1Char('_'));
+    }
+
+    return fileName;
+}
+
+void MainWindow::exportCurrentNoteAsHtml()
+{
+    if (currentNoteId.isEmpty()) {
+        QMessageBox::information(this, QStringLiteral("提示"),
+                                 QStringLiteral("当前没有可以导出的笔记"));
+        return;
+    }
+
+    // 先保存编辑内容，让导出结果和本地笔记保持一致
+    saveCurrentNote();
+
+    const QString suggestedPath = QDir::home().filePath(
+        safeExportFileName() + QStringLiteral(".html"));
+    const QString filePath = QFileDialog::getSaveFileName(
+        this, QStringLiteral("导出 HTML"), suggestedPath,
+        QStringLiteral("HTML 文件 (*.html *.htm)"));
+    if (filePath.isEmpty()) {
+        return;
+    }
+
+    // QTextDocument 可以把当前渲染结果转换成完整 HTML
+    QSaveFile outputFile(filePath);
+    if (!outputFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QMessageBox::warning(this, QStringLiteral("导出失败"),
+                             QStringLiteral("无法写入选择的文件"));
+        return;
+    }
+
+    outputFile.write(previewBrowser->document()->toHtml().toUtf8());
+    if (!outputFile.commit()) {
+        QMessageBox::warning(this, QStringLiteral("导出失败"),
+                             QStringLiteral("文件保存时发生错误"));
+        return;
+    }
+
+    ui->statusbar->showMessage(QStringLiteral("HTML 导出成功"), 3000);
+}
+
+void MainWindow::exportCurrentNoteAsPdf()
+{
+    if (currentNoteId.isEmpty()) {
+        QMessageBox::information(this, QStringLiteral("提示"),
+                                 QStringLiteral("当前没有可以导出的笔记"));
+        return;
+    }
+
+    saveCurrentNote();
+
+    const QString suggestedPath = QDir::home().filePath(
+        safeExportFileName() + QStringLiteral(".pdf"));
+    QString filePath = QFileDialog::getSaveFileName(
+        this, QStringLiteral("导出 PDF"), suggestedPath,
+        QStringLiteral("PDF 文件 (*.pdf)"));
+    if (filePath.isEmpty()) {
+        return;
+    }
+
+    // 用户没有输入扩展名时自动补充 pdf 后缀
+    if (!filePath.endsWith(QStringLiteral(".pdf"), Qt::CaseInsensitive)) {
+        filePath += QStringLiteral(".pdf");
+    }
+
+    // QPrinter 使用 PDF 输出模式时不需要系统中安装真实打印机
+    QPrinter printer(QPrinter::HighResolution);
+    printer.setOutputFormat(QPrinter::PdfFormat);
+    printer.setOutputFileName(filePath);
+    printer.setPageSize(QPageSize(QPageSize::A4));
+    printer.setDocName(titleEdit->text().trimmed());
+
+    // 直接打印预览文档可以保留标题、列表、表格等排版
+    previewBrowser->document()->print(&printer);
+
+    if (!QFileInfo::exists(filePath)) {
+        QMessageBox::warning(this, QStringLiteral("导出失败"),
+                             QStringLiteral("PDF 文件没有成功生成"));
+        return;
+    }
+
+    ui->statusbar->showMessage(QStringLiteral("PDF 导出成功"), 3000);
 }
 
 void MainWindow::renameSelectedItem()

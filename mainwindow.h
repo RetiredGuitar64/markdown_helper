@@ -73,6 +73,12 @@ private slots:
     // 根据下拉框选择的标签过滤笔记树
     void filterTreeByTag();
 
+    // 将当前笔记导出为可以在浏览器打开的 HTML 文件
+    void exportCurrentNoteAsHtml();
+
+    // 将当前笔记通过打印模块导出为 PDF 文件
+    void exportCurrentNoteAsPdf();
+
 private:
     // 一篇笔记在内存中的基本信息
     struct NoteRecord
@@ -147,6 +153,9 @@ private:
 
     // 控制编辑控件在有无笔记时的可用状态
     void setEditorEnabled(bool enabled);
+
+    // 生成适合作为导出文件名的默认标题
+    QString safeExportFileName() const;
 
     // Qt Designer 生成的界面对象
     Ui::MainWindow *ui;
