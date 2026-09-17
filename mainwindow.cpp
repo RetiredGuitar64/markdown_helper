@@ -506,6 +506,9 @@ void MainWindow::rebuildNoteTree()
     // 树刷新通常表示数据发生变化，搜索和标签也需要同步
     rebuildSearchIndex();
     rebuildTagChoices();
+
+    // 模型刷新后尽量恢复用户正在编辑的笔记选择
+    selectNoteInTree(currentNoteId);
 }
 
 void MainWindow::rebuildSearchIndex()
@@ -619,6 +622,7 @@ void MainWindow::loadNote(const QString &noteId)
     setEditorEnabled(true);
     loadingNote = false;
     updatePreview();
+    selectNoteInTree(noteId);
     ui->statusbar->showMessage(QStringLiteral("已打开 %1").arg(note.title), 2000);
 }
 
@@ -663,8 +667,29 @@ QString MainWindow::selectedNoteId() const
     return currentIndex.data(NoteIdRole).toString();
 }
 
+void MainWindow::selectNoteInTree(const QString &noteId)
+{
+    if (noteTreeModel == nullptr || noteId.isEmpty()) {
+        return;
+    }
+
+    // 树只有文件夹和笔记两层，直接遍历比递归函数更容易理解
+    for (int folderRow = 0; folderRow < noteTreeModel->rowCount(); ++folderRow) {
+        QStandardItem *folderItem = noteTreeModel->item(folderRow);
+        for (int noteRow = 0; noteRow < folderItem->rowCount(); ++noteRow) {
+            QStandardItem *noteItem = folderItem->child(noteRow);
+            if (noteItem->data(NoteIdRole).toString() == noteId) {
+                noteTreeView->setCurrentIndex(noteItem->index());
+                return;
+            }
+        }
+    }
+}
+
 void MainWindow::createNote()
 {
+    // 在保存当前笔记前记录目标文件夹，因为保存会刷新树模型
+    const QString targetFolder = selectedFolderName();
     bool accepted = false;
     const QString title = QInputDialog::getText(
         this, QStringLiteral("新建笔记"), QStringLiteral("笔记标题"),
@@ -680,7 +705,7 @@ void MainWindow::createNote()
     NoteRecord note;
     note.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     note.title = title;
-    note.folder = selectedFolderName();
+    note.folder = targetFolder;
     if (note.folder == QStringLiteral("未分类")) {
         note.folder.clear();
     }

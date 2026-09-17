@@ -151,6 +151,9 @@ private:
     // 获取树中当前选中笔记的编号
     QString selectedNoteId() const;
 
+    // 在树刷新后重新选中当前打开的笔记
+    void selectNoteInTree(const QString &noteId);
+
     // 控制编辑控件在有无笔记时的可用状态
     void setEditorEnabled(bool enabled);
 
