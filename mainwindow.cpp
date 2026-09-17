@@ -1,15 +1,32 @@
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 
+#include <QAction>
+#include <QCloseEvent>
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
 #include <QFontDatabase>
 #include <QFormLayout>
+#include <QInputDialog>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
+#include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QSaveFile>
 #include <QSplitter>
+#include <QStandardItemModel>
+#include <QStandardPaths>
 #include <QStatusBar>
 #include <QTextBrowser>
+#include <QTimer>
+#include <QToolBar>
 #include <QTreeView>
+#include <QUuid>
 #include <QVBoxLayout>
 
 MainWindow::MainWindow(QWidget *parent)
@@ -22,6 +39,9 @@ MainWindow::MainWindow(QWidget *parent)
     , markdownEditor(nullptr)
     , previewBrowser(nullptr)
     , wordCountLabel(nullptr)
+    , noteTreeModel(nullptr)
+    , saveTimer(nullptr)
+    , loadingNote(false)
 {
     // 先载入 Qt Designer 中的主窗口基础结构
     ui->setupUi(this);
@@ -29,26 +49,44 @@ MainWindow::MainWindow(QWidget *parent)
     // 再创建项目实际使用的编辑界面
     setupInterface();
     setupStyle();
+    setupActions();
+
+    // 单次计时器在停止输入一小段时间后执行保存
+    saveTimer = new QTimer(this);
+    saveTimer->setSingleShot(true);
+    saveTimer->setInterval(600);
 
     // 编辑内容改变时立即更新预览
     connect(markdownEditor, &QPlainTextEdit::textChanged,
             this, &MainWindow::updatePreview);
+    connect(markdownEditor, &QPlainTextEdit::textChanged,
+            this, &MainWindow::scheduleSave);
+    connect(titleEdit, &QLineEdit::textChanged,
+            this, &MainWindow::scheduleSave);
+    connect(tagEdit, &QLineEdit::textChanged,
+            this, &MainWindow::scheduleSave);
+    connect(saveTimer, &QTimer::timeout,
+            this, &MainWindow::saveCurrentNote);
 
-    // 放入一段示例内容方便第一次运行时查看效果
-    markdownEditor->setPlainText(
-        QStringLiteral("# 欢迎使用 Markdown 笔记\n\n"
-                       "在左侧管理笔记，在这里输入 **Markdown** 内容\n\n"
-                       "- 支持标题和列表\n"
-                       "- 支持代码块与表格\n\n"
-                       "```cpp\n"
-                       "qDebug() << \"Hello Markdown\";\n"
-                       "```\n"));
+    // 双击树中的笔记时将它载入编辑区
+    connect(noteTreeView, &QTreeView::doubleClicked,
+            this, &MainWindow::openTreeItem);
+
+    // 最后读取磁盘数据并显示上次保存的笔记
+    loadNotes();
 }
 
 MainWindow::~MainWindow()
 {
     // ui 对象拥有 Designer 创建的控件，需要在退出时释放
     delete ui;
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    // 窗口关闭前立即执行一次保存，避免等待中的内容丢失
+    saveCurrentNote();
+    event->accept();
 }
 
 void MainWindow::setupInterface()
@@ -136,6 +174,32 @@ void MainWindow::setupInterface()
     ui->statusbar->showMessage(QStringLiteral("准备就绪"));
 }
 
+void MainWindow::setupActions()
+{
+    // 文件菜单集中放置最常用的创建和保存操作
+    QMenu *fileMenu = ui->menubar->addMenu(QStringLiteral("文件"));
+    QToolBar *toolBar = addToolBar(QStringLiteral("常用操作"));
+    toolBar->setMovable(false);
+
+    QAction *newNoteAction = new QAction(QStringLiteral("新建笔记"), this);
+    newNoteAction->setShortcut(QKeySequence::New);
+    connect(newNoteAction, &QAction::triggered, this, &MainWindow::createNote);
+    fileMenu->addAction(newNoteAction);
+    toolBar->addAction(newNoteAction);
+
+    QAction *newFolderAction = new QAction(QStringLiteral("新建文件夹"), this);
+    newFolderAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+N")));
+    connect(newFolderAction, &QAction::triggered, this, &MainWindow::createFolder);
+    fileMenu->addAction(newFolderAction);
+    toolBar->addAction(newFolderAction);
+
+    QAction *saveAction = new QAction(QStringLiteral("保存"), this);
+    saveAction->setShortcut(QKeySequence::Save);
+    connect(saveAction, &QAction::triggered, this, &MainWindow::saveCurrentNote);
+    fileMenu->addAction(saveAction);
+    toolBar->addAction(saveAction);
+}
+
 void MainWindow::setupStyle()
 {
     // 使用系统自带的等宽字体显示 Markdown 源码
@@ -158,4 +222,404 @@ void MainWindow::updatePreview()
     // 字符数包含空格和换行，计算方式直观且稳定
     const int characterCount = markdownEditor->toPlainText().length();
     wordCountLabel->setText(QStringLiteral("字符数: %1").arg(characterCount));
+}
+
+QString MainWindow::dataDirectoryPath() const
+{
+    // 使用系统推荐的应用数据目录，避免把用户笔记写入程序目录
+    QString path = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+
+    // 极少数系统无法提供目录时使用用户主目录下的备用路径
+    if (path.isEmpty()) {
+        path = QDir::homePath() + QStringLiteral("/.markdown_helper");
+    }
+
+    return path;
+}
+
+QString MainWindow::noteFilePath(const QString &fileName) const
+{
+    // 所有 Markdown 正文统一放在 notes 子目录中
+    return QDir(dataDirectoryPath()).filePath(QStringLiteral("notes/") + fileName);
+}
+
+void MainWindow::loadNotes()
+{
+    // 保证数据目录和正文目录在读取前已经存在
+    QDir dataDirectory(dataDirectoryPath());
+    dataDirectory.mkpath(QStringLiteral("notes"));
+
+    QFile metadataFile(dataDirectory.filePath(QStringLiteral("notes.json")));
+    if (metadataFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        // 解析保存文件中的根 JSON 对象
+        const QJsonDocument document = QJsonDocument::fromJson(metadataFile.readAll());
+        const QJsonObject rootObject = document.object();
+
+        // 读取文件夹数组并忽略空名称
+        const QJsonArray folderArray = rootObject.value(QStringLiteral("folders")).toArray();
+        for (const QJsonValue &value : folderArray) {
+            const QString folderName = value.toString().trimmed();
+            if (!folderName.isEmpty() && !folders.contains(folderName)) {
+                folders.append(folderName);
+            }
+        }
+
+        // 读取每篇笔记的元数据，正文稍后按需载入
+        const QJsonArray noteArray = rootObject.value(QStringLiteral("notes")).toArray();
+        for (const QJsonValue &value : noteArray) {
+            const QJsonObject object = value.toObject();
+            NoteRecord note;
+            note.id = object.value(QStringLiteral("id")).toString();
+            note.title = object.value(QStringLiteral("title")).toString();
+            note.folder = object.value(QStringLiteral("folder")).toString();
+            note.fileName = object.value(QStringLiteral("fileName")).toString();
+            note.updatedAt = object.value(QStringLiteral("updatedAt")).toString();
+
+            const QJsonArray tagArray = object.value(QStringLiteral("tags")).toArray();
+            for (const QJsonValue &tagValue : tagArray) {
+                note.tags.append(tagValue.toString());
+            }
+
+            // 缺少编号或文件名的记录无法使用，因此不加入列表
+            if (!note.id.isEmpty() && !note.fileName.isEmpty()) {
+                notes.append(note);
+            }
+        }
+    }
+
+    // 第一次运行时自动创建示例笔记
+    if (notes.isEmpty()) {
+        createWelcomeNote();
+    }
+
+    rebuildNoteTree();
+
+    // 默认打开第一篇笔记，避免界面显示为空
+    if (!notes.isEmpty()) {
+        loadNote(notes.first().id);
+    } else {
+        setEditorEnabled(false);
+    }
+}
+
+void MainWindow::saveMetadata()
+{
+    // 把文件夹列表转换成 JSON 数组
+    QJsonArray folderArray;
+    for (const QString &folder : std::as_const(folders)) {
+        folderArray.append(folder);
+    }
+
+    // 把每篇笔记的轻量信息写入 JSON 数组
+    QJsonArray noteArray;
+    for (const NoteRecord &note : std::as_const(notes)) {
+        QJsonArray tagArray;
+        for (const QString &tag : note.tags) {
+            tagArray.append(tag);
+        }
+
+        QJsonObject object;
+        object.insert(QStringLiteral("id"), note.id);
+        object.insert(QStringLiteral("title"), note.title);
+        object.insert(QStringLiteral("folder"), note.folder);
+        object.insert(QStringLiteral("tags"), tagArray);
+        object.insert(QStringLiteral("fileName"), note.fileName);
+        object.insert(QStringLiteral("updatedAt"), note.updatedAt);
+        noteArray.append(object);
+    }
+
+    QJsonObject rootObject;
+    rootObject.insert(QStringLiteral("folders"), folderArray);
+    rootObject.insert(QStringLiteral("notes"), noteArray);
+
+    // QSaveFile 先写临时文件，成功后再替换旧文件
+    QSaveFile metadataFile(QDir(dataDirectoryPath()).filePath(QStringLiteral("notes.json")));
+    if (!metadataFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        ui->statusbar->showMessage(QStringLiteral("元数据保存失败"), 3000);
+        return;
+    }
+
+    metadataFile.write(QJsonDocument(rootObject).toJson(QJsonDocument::Indented));
+    metadataFile.commit();
+}
+
+void MainWindow::createWelcomeNote()
+{
+    // 欢迎笔记也使用普通的数据结构，用户可以自由编辑或删除
+    NoteRecord note;
+    note.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    note.title = QStringLiteral("欢迎使用");
+    note.folder = QStringLiteral("入门");
+    note.tags = {QStringLiteral("示例"), QStringLiteral("Markdown")};
+    note.fileName = note.id + QStringLiteral(".md");
+    note.updatedAt = QDateTime::currentDateTime().toString(Qt::ISODate);
+
+    folders.append(note.folder);
+    notes.append(note);
+
+    // 写入覆盖常用语法的初始 Markdown 内容
+    QSaveFile contentFile(noteFilePath(note.fileName));
+    if (contentFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        const QString welcomeText = QStringLiteral(
+            "# 欢迎使用 Markdown 笔记\n\n"
+            "在中间输入 **Markdown**，右侧会实时显示效果\n\n"
+            "## 常用内容\n\n"
+            "- 新建和管理笔记\n"
+            "- 使用文件夹与标签分类\n"
+            "- 搜索标题和正文\n\n"
+            "| 功能 | 状态 |\n"
+            "| --- | --- |\n"
+            "| 实时预览 | 可用 |\n"
+            "| 本地保存 | 可用 |\n\n"
+            "```cpp\n"
+            "qDebug() << \"Hello Markdown\";\n"
+            "```\n");
+        contentFile.write(welcomeText.toUtf8());
+        contentFile.commit();
+    }
+
+    saveMetadata();
+}
+
+void MainWindow::rebuildNoteTree()
+{
+    // 重建模型前清理旧对象，视图会自动切换到新模型
+    if (noteTreeModel != nullptr) {
+        noteTreeModel->deleteLater();
+    }
+
+    noteTreeModel = new QStandardItemModel(this);
+    noteTreeModel->setHorizontalHeaderLabels({QStringLiteral("笔记")});
+
+    // 未分类节点始终存在，方便接收没有文件夹的笔记
+    QStringList visibleFolders = folders;
+    if (!visibleFolders.contains(QStringLiteral("未分类"))) {
+        visibleFolders.prepend(QStringLiteral("未分类"));
+    }
+
+    for (const QString &folderName : std::as_const(visibleFolders)) {
+        QStandardItem *folderItem = new QStandardItem(folderName);
+        folderItem->setEditable(false);
+        folderItem->setData(FolderItem, ItemTypeRole);
+
+        // 将属于当前文件夹的笔记依次添加为子节点
+        for (const NoteRecord &note : std::as_const(notes)) {
+            const QString actualFolder = note.folder.isEmpty()
+                ? QStringLiteral("未分类") : note.folder;
+            if (actualFolder == folderName) {
+                QStandardItem *noteItem = new QStandardItem(note.title);
+                noteItem->setEditable(false);
+                noteItem->setData(NoteItem, ItemTypeRole);
+                noteItem->setData(note.id, NoteIdRole);
+                folderItem->appendRow(noteItem);
+            }
+        }
+
+        noteTreeModel->appendRow(folderItem);
+    }
+
+    noteTreeView->setModel(noteTreeModel);
+    noteTreeView->expandAll();
+}
+
+int MainWindow::findNoteIndex(const QString &noteId) const
+{
+    // 目前数据规模较小，线性遍历简单并且足够快速
+    for (int index = 0; index < notes.size(); ++index) {
+        if (notes.at(index).id == noteId) {
+            return index;
+        }
+    }
+
+    return -1;
+}
+
+void MainWindow::loadNote(const QString &noteId)
+{
+    const int noteIndex = findNoteIndex(noteId);
+    if (noteIndex < 0) {
+        return;
+    }
+
+    // 切换笔记前先保存上一篇正在编辑的内容
+    if (!currentNoteId.isEmpty() && currentNoteId != noteId) {
+        saveCurrentNote();
+    }
+
+    loadingNote = true;
+    const NoteRecord &note = notes.at(noteIndex);
+    currentNoteId = note.id;
+
+    // 标题和标签来自元数据文件
+    titleEdit->setText(note.title);
+    tagEdit->setText(note.tags.join(QStringLiteral(", ")));
+
+    // 正文来自单独的 Markdown 文件
+    QFile contentFile(noteFilePath(note.fileName));
+    if (contentFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        markdownEditor->setPlainText(QString::fromUtf8(contentFile.readAll()));
+    } else {
+        markdownEditor->clear();
+    }
+
+    setEditorEnabled(true);
+    loadingNote = false;
+    updatePreview();
+    ui->statusbar->showMessage(QStringLiteral("已打开 %1").arg(note.title), 2000);
+}
+
+void MainWindow::openTreeItem(const QModelIndex &index)
+{
+    // 文件夹节点只负责展开和折叠，不载入编辑区
+    if (index.data(ItemTypeRole).toInt() != NoteItem) {
+        return;
+    }
+
+    loadNote(index.data(NoteIdRole).toString());
+}
+
+QString MainWindow::selectedFolderName() const
+{
+    const QModelIndex currentIndex = noteTreeView->currentIndex();
+    if (!currentIndex.isValid()) {
+        return QStringLiteral("未分类");
+    }
+
+    // 选中文件夹时直接使用节点文本
+    if (currentIndex.data(ItemTypeRole).toInt() == FolderItem) {
+        return currentIndex.data(Qt::DisplayRole).toString();
+    }
+
+    // 选中笔记时使用它的父文件夹
+    if (currentIndex.parent().isValid()) {
+        return currentIndex.parent().data(Qt::DisplayRole).toString();
+    }
+
+    return QStringLiteral("未分类");
+}
+
+void MainWindow::createNote()
+{
+    bool accepted = false;
+    const QString title = QInputDialog::getText(
+        this, QStringLiteral("新建笔记"), QStringLiteral("笔记标题"),
+        QLineEdit::Normal, QStringLiteral("未命名笔记"), &accepted).trimmed();
+
+    // 用户取消或没有输入标题时不创建数据
+    if (!accepted || title.isEmpty()) {
+        return;
+    }
+
+    saveCurrentNote();
+
+    NoteRecord note;
+    note.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    note.title = title;
+    note.folder = selectedFolderName();
+    if (note.folder == QStringLiteral("未分类")) {
+        note.folder.clear();
+    }
+    note.fileName = note.id + QStringLiteral(".md");
+    note.updatedAt = QDateTime::currentDateTime().toString(Qt::ISODate);
+    notes.append(note);
+
+    // 新笔记先创建一个空的正文文件
+    QSaveFile contentFile(noteFilePath(note.fileName));
+    if (contentFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        contentFile.write(QByteArray());
+        contentFile.commit();
+    }
+
+    saveMetadata();
+    rebuildNoteTree();
+    loadNote(note.id);
+}
+
+void MainWindow::createFolder()
+{
+    bool accepted = false;
+    const QString folderName = QInputDialog::getText(
+        this, QStringLiteral("新建文件夹"), QStringLiteral("文件夹名称"),
+        QLineEdit::Normal, QString(), &accepted).trimmed();
+
+    if (!accepted || folderName.isEmpty()) {
+        return;
+    }
+
+    // 不允许创建重名文件夹，避免移动笔记时产生歧义
+    if (folders.contains(folderName) || folderName == QStringLiteral("未分类")) {
+        QMessageBox::information(this, QStringLiteral("提示"),
+                                 QStringLiteral("这个文件夹已经存在"));
+        return;
+    }
+
+    folders.append(folderName);
+    saveMetadata();
+    rebuildNoteTree();
+    ui->statusbar->showMessage(QStringLiteral("文件夹创建成功"), 2000);
+}
+
+void MainWindow::scheduleSave()
+{
+    // 程序主动载入内容时不需要触发保存计时器
+    if (loadingNote || currentNoteId.isEmpty()) {
+        return;
+    }
+
+    saveTimer->start();
+    ui->statusbar->showMessage(QStringLiteral("内容已修改，等待自动保存"));
+}
+
+void MainWindow::saveCurrentNote()
+{
+    const int noteIndex = findNoteIndex(currentNoteId);
+    if (noteIndex < 0 || loadingNote) {
+        return;
+    }
+
+    saveTimer->stop();
+    NoteRecord &note = notes[noteIndex];
+
+    // 空标题自动恢复为未命名，保证树中始终有可见文字
+    note.title = titleEdit->text().trimmed();
+    if (note.title.isEmpty()) {
+        note.title = QStringLiteral("未命名笔记");
+    }
+
+    // 英文逗号和中文逗号都可以用于分隔多个标签
+    QString normalizedTags = tagEdit->text();
+    normalizedTags.replace(QChar(0xFF0C), QLatin1Char(','));
+    note.tags.clear();
+    for (const QString &part : normalizedTags.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+        const QString tag = part.trimmed();
+        if (!tag.isEmpty() && !note.tags.contains(tag)) {
+            note.tags.append(tag);
+        }
+    }
+    note.updatedAt = QDateTime::currentDateTime().toString(Qt::ISODate);
+
+    // 使用安全写入方式保存当前 Markdown 正文
+    QSaveFile contentFile(noteFilePath(note.fileName));
+    if (!contentFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        ui->statusbar->showMessage(QStringLiteral("正文保存失败"), 3000);
+        return;
+    }
+    contentFile.write(markdownEditor->toPlainText().toUtf8());
+    if (!contentFile.commit()) {
+        ui->statusbar->showMessage(QStringLiteral("正文保存失败"), 3000);
+        return;
+    }
+
+    saveMetadata();
+    rebuildNoteTree();
+    ui->statusbar->showMessage(QStringLiteral("已自动保存"), 1800);
+}
+
+void MainWindow::setEditorEnabled(bool enabled)
+{
+    // 没有笔记时禁止输入，避免产生无处保存的内容
+    titleEdit->setEnabled(enabled);
+    tagEdit->setEnabled(enabled);
+    markdownEditor->setEnabled(enabled);
+    previewBrowser->setEnabled(enabled);
 }
