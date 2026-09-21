@@ -13,9 +13,6 @@ public:
     // 从 notes.json 载入文件夹和笔记元数据
     bool load();
 
-    // 将当前元数据保存到 notes.json
-    bool saveMetadata() const;
-
     // 返回全部笔记供界面模型读取
     const QVector<Note> &notes() const;
 
@@ -44,20 +41,18 @@ public:
     // 添加一个不重名的文件夹
     bool addFolder(const QString &folderName);
 
-    // 重命名文件夹并更新其中笔记的归属
-    bool renameFolder(const QString &oldName, const QString &newName);
-
     // 删除文件夹并将其中笔记移动到未分类
     bool removeFolder(const QString &folderName);
 
     // 读取指定笔记的 Markdown 正文
     QString readNoteContent(const Note &note) const;
 
+private:
+    // 将当前元数据保存到 notes.json
+    bool saveMetadata() const;
+
     // 安全写入指定笔记的 Markdown 正文
     bool saveNoteContent(const Note &note, const QString &content) const;
-
-    // 删除指定笔记对应的 Markdown 文件
-    bool deleteNoteContent(const Note &note) const;
 
     // 返回系统推荐的应用数据目录
     QString dataDirectoryPath() const;
@@ -65,7 +60,6 @@ public:
     // 返回指定 Markdown 文件的完整路径
     QString noteFilePath(const QString &fileName) const;
 
-private:
     // 首次运行时创建一篇普通的欢迎笔记
     bool createWelcomeNote();
 

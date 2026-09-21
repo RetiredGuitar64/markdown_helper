@@ -46,7 +46,7 @@ private slots:
     // 将当前编辑的笔记写入 Markdown 文件
     void saveCurrentNote();
 
-    // 重命名当前选中的笔记或文件夹
+    // 重命名当前选中的笔记
     void renameSelectedItem();
 
     // 删除当前选中的笔记或文件夹
@@ -107,17 +107,8 @@ private:
     // 在编辑区载入指定编号的笔记
     void loadNote(const QString &noteId);
 
-    // 获取当前树节点代表的文件夹名称
-    QString selectedFolderName() const;
-
-    // 获取树中当前选中笔记的编号
-    QString selectedNoteId() const;
-
     // 在树刷新后重新选中当前打开的笔记
     void selectNoteInTree(const QString &noteId);
-
-    // 控制编辑控件在有无笔记时的可用状态
-    void setEditorEnabled(bool enabled);
 
     // 生成适合作为导出文件名的默认标题
     QString safeExportFileName() const;

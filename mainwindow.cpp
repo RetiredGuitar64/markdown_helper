@@ -210,7 +210,9 @@ void MainWindow::loadNotes()
     if (!storage.notes().isEmpty()) {
         loadNote(storage.notes().first().id);
     } else {
-        setEditorEnabled(false);
+        ui->titleEdit->setEnabled(false);
+        ui->markdownEditor->setEnabled(false);
+        ui->previewBrowser->setEnabled(false);
     }
 }
 
@@ -360,7 +362,9 @@ void MainWindow::loadNote(const QString &noteId)
     // 存储对象按需读取这一篇笔记的 Markdown 正文
     ui->markdownEditor->setPlainText(storage.readNoteContent(*note));
 
-    setEditorEnabled(true);
+    ui->titleEdit->setEnabled(true);
+    ui->markdownEditor->setEnabled(true);
+    ui->previewBrowser->setEnabled(true);
     updatePreview();
     selectNoteInTree(noteId);
     ui->statusbar->showMessage(QStringLiteral("已打开 %1").arg(note->title), 2000);
@@ -374,37 +378,6 @@ void MainWindow::openTreeItem(const QModelIndex &index)
     }
 
     loadNote(index.data(NoteIdRole).toString());
-}
-
-QString MainWindow::selectedFolderName() const
-{
-    const QModelIndex currentIndex = ui->noteTreeView->currentIndex();
-    if (!currentIndex.isValid()) {
-        return QStringLiteral("未分类");
-    }
-
-    // 选中文件夹时直接使用节点文本
-    if (currentIndex.data(ItemTypeRole).toInt() == FolderItem) {
-        return currentIndex.data(Qt::DisplayRole).toString();
-    }
-
-    // 选中笔记时使用它的父文件夹
-    if (currentIndex.parent().isValid()) {
-        return currentIndex.parent().data(Qt::DisplayRole).toString();
-    }
-
-    return QStringLiteral("未分类");
-}
-
-QString MainWindow::selectedNoteId() const
-{
-    const QModelIndex currentIndex = ui->noteTreeView->currentIndex();
-    if (!currentIndex.isValid()
-        || currentIndex.data(ItemTypeRole).toInt() != NoteItem) {
-        return QString();
-    }
-
-    return currentIndex.data(NoteIdRole).toString();
 }
 
 void MainWindow::selectNoteInTree(const QString &noteId)
@@ -424,8 +397,14 @@ void MainWindow::selectNoteInTree(const QString &noteId)
 
 void MainWindow::createNote()
 {
-    // 在保存当前笔记前记录目标文件夹
-    const QString targetFolder = selectedFolderName();
+    // 新笔记默认放入当前选中节点所在的文件夹
+    const QModelIndex selectedIndex = ui->noteTreeView->currentIndex();
+    QString targetFolder = QStringLiteral("未分类");
+    if (selectedIndex.data(ItemTypeRole).toInt() == FolderItem) {
+        targetFolder = selectedIndex.data().toString();
+    } else if (selectedIndex.parent().isValid()) {
+        targetFolder = selectedIndex.parent().data().toString();
+    }
     bool accepted = false;
     const QString title = QInputDialog::getText(
         this, QStringLiteral("新建笔记"), QStringLiteral("笔记标题"),
@@ -514,14 +493,6 @@ void MainWindow::saveCurrentNote()
     // 自动保存只更新当前笔记对应的树节点和搜索条目
     updateSearchItem(*note, content);
     ui->statusbar->showMessage(QStringLiteral("已自动保存"), 1800);
-}
-
-void MainWindow::setEditorEnabled(bool enabled)
-{
-    // 没有笔记时禁止输入，避免产生无处保存的内容
-    ui->titleEdit->setEnabled(enabled);
-    ui->markdownEditor->setEnabled(enabled);
-    ui->previewBrowser->setEnabled(enabled);
 }
 
 void MainWindow::updateSearch(const QString &keyword)
@@ -652,13 +623,12 @@ void MainWindow::exportCurrentNoteAsPdf()
 void MainWindow::renameSelectedItem()
 {
     const QModelIndex currentIndex = ui->noteTreeView->currentIndex();
-    if (!currentIndex.isValid()) {
+    if (currentIndex.data(ItemTypeRole).toInt() != NoteItem) {
         QMessageBox::information(this, QStringLiteral("提示"),
-                                 QStringLiteral("请先选择笔记或文件夹"));
+                                 QStringLiteral("请先选择一篇笔记"));
         return;
     }
 
-    const int itemType = currentIndex.data(ItemTypeRole).toInt();
     const QString oldName = currentIndex.data(Qt::DisplayRole).toString();
     bool accepted = false;
     const QString newName = QInputDialog::getText(
@@ -669,46 +639,21 @@ void MainWindow::renameSelectedItem()
         return;
     }
 
-    if (itemType == NoteItem) {
-        const QString noteId = currentIndex.data(NoteIdRole).toString();
-        const Note *note = storage.findNote(noteId);
-        if (note == nullptr) {
-            return;
-        }
-
-        if (!storage.renameNote(noteId, newName)) {
-            ui->statusbar->showMessage(QStringLiteral("重命名保存失败"), 3000);
-            return;
-        }
-
-        // 同步更新当前打开笔记的标题输入框
-        if (note->id == currentNoteId) {
-            const QSignalBlocker blocker(ui->titleEdit);
-            ui->titleEdit->setText(newName);
-        }
-    } else if (itemType == FolderItem) {
-        // 固定的未分类节点不能重命名
-        if (oldName == QStringLiteral("未分类")) {
-            QMessageBox::information(this, QStringLiteral("提示"),
-                                     QStringLiteral("未分类是系统文件夹，不能重命名"));
-            return;
-        }
-
-        if (storage.folders().contains(newName)
-            || newName == QStringLiteral("未分类")) {
-            QMessageBox::information(this, QStringLiteral("提示"),
-                                     QStringLiteral("这个文件夹已经存在"));
-            return;
-        }
-
-        if (!storage.renameFolder(oldName, newName)) {
-            ui->statusbar->showMessage(QStringLiteral("重命名保存失败"), 3000);
-            return;
-        }
+    const QString noteId = currentIndex.data(NoteIdRole).toString();
+    if (!storage.renameNote(noteId, newName)) {
+        ui->statusbar->showMessage(QStringLiteral("重命名保存失败"), 3000);
+        return;
     }
 
-    rebuildNoteTree();
-    rebuildSearchIndex();
+    // 重命名只影响当前条目，无需重新读取其他 Markdown 文件
+    const Note *note = storage.findNote(noteId);
+    if (note != nullptr) {
+        updateSearchItem(*note, storage.readNoteContent(*note));
+    }
+    if (noteId == currentNoteId) {
+        const QSignalBlocker blocker(ui->titleEdit);
+        ui->titleEdit->setText(newName);
+    }
     ui->statusbar->showMessage(QStringLiteral("重命名完成"), 2000);
 }
 
@@ -751,6 +696,14 @@ void MainWindow::deleteSelectedItem()
         if (currentNoteId == noteId) {
             currentNoteId.clear();
         }
+
+        // 删除搜索模型中的对应行，其他笔记无需重新读取
+        const QModelIndexList matches = searchSourceModel->match(
+            searchSourceModel->index(0, 0), NoteIdRole, noteId, 1,
+            Qt::MatchExactly);
+        if (!matches.isEmpty()) {
+            searchSourceModel->removeRow(matches.first().row());
+        }
     } else if (itemType == FolderItem) {
         // 未分类是显示用的固定节点，不能从列表移除
         if (itemName == QStringLiteral("未分类")) {
@@ -766,7 +719,10 @@ void MainWindow::deleteSelectedItem()
     }
 
     rebuildNoteTree();
-    rebuildSearchIndex();
+    if (itemType == FolderItem) {
+        // 删除文件夹会同时移动多篇笔记，这种低频批量操作才重建搜索项
+        rebuildSearchIndex();
+    }
     // 当前笔记被删除后自动打开剩余的第一篇
     if (currentNoteId.isEmpty()) {
         if (!storage.notes().isEmpty()) {
@@ -776,7 +732,9 @@ void MainWindow::deleteSelectedItem()
             const QSignalBlocker editorBlocker(ui->markdownEditor);
             ui->titleEdit->clear();
             ui->markdownEditor->clear();
-            setEditorEnabled(false);
+            ui->titleEdit->setEnabled(false);
+            ui->markdownEditor->setEnabled(false);
+            ui->previewBrowser->setEnabled(false);
         }
     }
 
@@ -785,7 +743,9 @@ void MainWindow::deleteSelectedItem()
 
 void MainWindow::moveSelectedNote()
 {
-    const QString noteId = selectedNoteId();
+    const QModelIndex selectedIndex = ui->noteTreeView->currentIndex();
+    const QString noteId = selectedIndex.data(ItemTypeRole).toInt() == NoteItem
+        ? selectedIndex.data(NoteIdRole).toString() : QString();
     const Note *note = storage.findNote(noteId);
     if (note == nullptr) {
         QMessageBox::information(this, QStringLiteral("提示"),
@@ -817,6 +777,10 @@ void MainWindow::moveSelectedNote()
     }
 
     rebuildNoteTree();
-    rebuildSearchIndex();
+    // 移动只改变一篇笔记的文件夹显示和搜索标题
+    note = storage.findNote(noteId);
+    if (note != nullptr) {
+        updateSearchItem(*note, storage.readNoteContent(*note));
+    }
     ui->statusbar->showMessage(QStringLiteral("笔记已移动"), 2000);
 }

@@ -144,7 +144,7 @@ const Note *NoteStorage::addNote(const QString &title, const QString &folder)
     // 新笔记先创建一个空正文文件
     Note &createdNote = noteList.last();
     if (!saveNoteContent(createdNote, QString()) || !saveMetadata()) {
-        deleteNoteContent(createdNote);
+        QFile::remove(noteFilePath(createdNote.fileName));
         noteList.removeLast();
         return nullptr;
     }
@@ -200,7 +200,7 @@ bool NoteStorage::removeNote(const QString &noteId)
     for (int index = 0; index < noteList.size(); ++index) {
         if (noteList.at(index).id == noteId) {
             // 正文不存在时也允许移除已经失效的元数据
-            deleteNoteContent(noteList.at(index));
+            QFile::remove(noteFilePath(noteList.at(index).fileName));
             noteList.removeAt(index);
             return saveMetadata();
         }
@@ -218,25 +218,6 @@ bool NoteStorage::addFolder(const QString &folderName)
     }
 
     folderList.append(trimmedName);
-    return saveMetadata();
-}
-
-bool NoteStorage::renameFolder(const QString &oldName, const QString &newName)
-{
-    const int folderIndex = folderList.indexOf(oldName);
-    if (folderIndex < 0 || newName.trimmed().isEmpty()
-        || newName == QStringLiteral("未分类") || folderList.contains(newName)) {
-        return false;
-    }
-
-    // 文件夹改名时同步更新所有所属笔记
-    folderList[folderIndex] = newName;
-    for (Note &note : noteList) {
-        if (note.folder == oldName) {
-            note.folder = newName;
-        }
-    }
-
     return saveMetadata();
 }
 
@@ -276,14 +257,6 @@ bool NoteStorage::saveNoteContent(const Note &note, const QString &content) cons
 
     contentFile.write(content.toUtf8());
     return contentFile.commit();
-}
-
-bool NoteStorage::deleteNoteContent(const Note &note) const
-{
-    const QString filePath = noteFilePath(note.fileName);
-
-    // 文件本来就不存在时也视为删除完成
-    return !QFile::exists(filePath) || QFile::remove(filePath);
 }
 
 QString NoteStorage::dataDirectoryPath() const
