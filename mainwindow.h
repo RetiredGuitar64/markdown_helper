@@ -6,17 +6,11 @@
 #include <QMainWindow>
 
 class QCloseEvent;
-class QComboBox;
 class QLabel;
-class QLineEdit;
-class QListView;
-class QPlainTextEdit;
 class QSortFilterProxyModel;
 class QStandardItem;
 class QStandardItemModel;
-class QTextBrowser;
 class QTimer;
-class QTreeView;
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -49,9 +43,6 @@ private slots:
     // 打开笔记树中双击或选中的笔记
     void openTreeItem(const QModelIndex &index);
 
-    // 延迟保存编辑内容，避免每次按键都访问磁盘
-    void scheduleSave();
-
     // 将当前编辑的笔记写入 Markdown 文件
     void saveCurrentNote();
 
@@ -69,9 +60,6 @@ private slots:
 
     // 打开全文搜索结果中选中的笔记
     void openSearchResult(const QModelIndex &index);
-
-    // 根据下拉框选择的标签过滤笔记树
-    void filterTreeByTag();
 
     // 将当前笔记导出为可以在浏览器打开的 HTML 文件
     void exportCurrentNoteAsHtml();
@@ -113,20 +101,8 @@ private:
     // 建立包含标题、正文和标签的简单搜索数据源
     void rebuildSearchIndex();
 
-    // 只更新一篇笔记在树中的节点
-    void updateNoteTreeItem(const Note &note);
-
-    // 只更新一篇笔记在全文搜索模型中的条目
+    // 只更新一篇笔记在树和搜索模型中的条目
     void updateSearchItem(const Note &note, const QString &content);
-
-    // 根据编号查找树中的笔记节点
-    QStandardItem *findNoteTreeItem(const QString &noteId) const;
-
-    // 根据编号查找搜索数据源中的笔记条目
-    QStandardItem *findSearchItem(const QString &noteId) const;
-
-    // 收集全部标签并刷新标签筛选下拉框
-    void rebuildTagChoices();
 
     // 在编辑区载入指定编号的笔记
     void loadNote(const QString &noteId);
@@ -149,30 +125,6 @@ private:
     // Qt Designer 生成的界面对象
     Ui::MainWindow *ui;
 
-    // 左侧用于查找笔记的输入框
-    QLineEdit *searchEdit;
-
-    // 标签下拉框用于按一个标签筛选笔记树
-    QComboBox *tagFilterCombo;
-
-    // 左侧用于显示文件夹和笔记的树
-    QTreeView *noteTreeView;
-
-    // 搜索框有内容时显示匹配的笔记列表
-    QListView *searchResultView;
-
-    // 编辑区上方显示当前笔记标题
-    QLineEdit *titleEdit;
-
-    // 编辑区上方用于填写逗号分隔的标签
-    QLineEdit *tagEdit;
-
-    // 中间的 Markdown 源码编辑器
-    QPlainTextEdit *markdownEditor;
-
-    // 右侧的 Markdown 渲染预览框
-    QTextBrowser *previewBrowser;
-
     // 状态栏中显示字数信息的标签
     QLabel *wordCountLabel;
 
@@ -194,7 +146,5 @@ private:
     // 当前正在编辑的笔记编号
     QString currentNoteId;
 
-    // 载入笔记时阻止输入信号触发自动保存
-    bool loadingNote;
 };
 #endif // MAINWINDOW_H

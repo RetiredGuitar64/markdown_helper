@@ -153,16 +153,15 @@ const Note *NoteStorage::addNote(const QString &title, const QString &folder)
 }
 
 bool NoteStorage::updateNote(const QString &noteId, const QString &title,
-                             const QStringList &tags, const QString &content)
+                             const QString &content)
 {
     // 在存储类内部查找可修改的数据项
     for (Note &note : noteList) {
         if (note.id == noteId) {
             note.title = title;
-            note.tags = tags;
             note.updatedAt = QDateTime::currentDateTime().toString(Qt::ISODate);
 
-            // 正文成功写入后再更新 JSON 元数据
+            // 旧数据中的标签不再提供编辑界面，但仍原样写回避免数据丢失
             return saveNoteContent(note, content) && saveMetadata();
         }
     }

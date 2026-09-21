@@ -46,12 +46,6 @@
          </widget>
         </item>
         <item>
-         <widget class="QComboBox" name="tagFilterCombo">
-          <property name="toolTip"><string>按标签筛选笔记树</string></property>
-          <item><property name="text"><string>全部标签</string></property></item>
-         </widget>
-        </item>
-        <item>
          <widget class="QListView" name="searchResultView">
           <property name="maximumSize">
            <size><width>16777215</width><height>180</height></size>
@@ -94,16 +88,6 @@
           <item row="0" column="1">
            <widget class="QLineEdit" name="titleEdit">
             <property name="placeholderText"><string>笔记标题</string></property>
-           </widget>
-          </item>
-          <item row="1" column="0">
-           <widget class="QLabel" name="tagLabel">
-            <property name="text"><string>标签</string></property>
-           </widget>
-          </item>
-          <item row="1" column="1">
-           <widget class="QLineEdit" name="tagEdit">
-            <property name="placeholderText"><string>学习, Qt, 随笔</string></property>
            </widget>
           </item>
          </layout>

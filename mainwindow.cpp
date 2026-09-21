@@ -3,7 +3,6 @@
 
 #include <QAction>
 #include <QCloseEvent>
-#include <QComboBox>
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -30,20 +29,11 @@
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::MainWindow)
-    , searchEdit(nullptr)
-    , tagFilterCombo(nullptr)
-    , noteTreeView(nullptr)
-    , searchResultView(nullptr)
-    , titleEdit(nullptr)
-    , tagEdit(nullptr)
-    , markdownEditor(nullptr)
-    , previewBrowser(nullptr)
     , wordCountLabel(nullptr)
     , noteTreeModel(nullptr)
     , searchSourceModel(nullptr)
     , searchProxyModel(nullptr)
     , saveTimer(nullptr)
-    , loadingNote(false)
 {
     // 先载入 Qt Designer 中的主窗口基础结构
     ui->setupUi(this);
@@ -59,32 +49,29 @@ MainWindow::MainWindow(QWidget *parent)
     saveTimer->setInterval(600);
 
     // 编辑内容改变时立即更新预览
-    connect(markdownEditor, &QPlainTextEdit::textChanged,
+    connect(ui->markdownEditor, &QPlainTextEdit::textChanged,
             this, &MainWindow::updatePreview);
-    connect(markdownEditor, &QPlainTextEdit::textChanged,
-            this, &MainWindow::scheduleSave);
-    connect(titleEdit, &QLineEdit::textChanged,
-            this, &MainWindow::scheduleSave);
-    connect(tagEdit, &QLineEdit::textChanged,
-            this, &MainWindow::scheduleSave);
+    const auto queueSave = [this] {
+        // 只有打开笔记后才允许启动自动保存计时器
+        if (!currentNoteId.isEmpty()) {
+            saveTimer->start();
+            ui->statusbar->showMessage(QStringLiteral("内容已修改，等待自动保存"));
+        }
+    };
+    connect(ui->markdownEditor, &QPlainTextEdit::textChanged, this, queueSave);
+    connect(ui->titleEdit, &QLineEdit::textChanged, this, queueSave);
     connect(saveTimer, &QTimer::timeout,
             this, &MainWindow::saveCurrentNote);
 
-    // 双击树中的笔记时将它载入编辑区
-    connect(noteTreeView, &QTreeView::doubleClicked,
-            this, &MainWindow::openTreeItem);
-    connect(noteTreeView, &QTreeView::clicked,
+    // 单击树中的笔记时将它载入编辑区
+    connect(ui->noteTreeView, &QTreeView::clicked,
             this, &MainWindow::openTreeItem);
 
-    // 搜索文字和标签选项改变时马上刷新左侧显示
-    connect(searchEdit, &QLineEdit::textChanged,
+    // 搜索文字改变时马上刷新左侧结果
+    connect(ui->searchEdit, &QLineEdit::textChanged,
             this, &MainWindow::updateSearch);
-    connect(searchResultView, &QListView::clicked,
+    connect(ui->searchResultView, &QListView::clicked,
             this, &MainWindow::openSearchResult);
-    connect(searchResultView, &QListView::doubleClicked,
-            this, &MainWindow::openSearchResult);
-    connect(tagFilterCombo, &QComboBox::currentTextChanged,
-            this, &MainWindow::filterTreeByTag);
 
     // 最后读取磁盘数据并显示上次保存的笔记
     loadNotes();
@@ -105,16 +92,6 @@ void MainWindow::closeEvent(QCloseEvent *event)
 
 void MainWindow::setupInterface()
 {
-    // Designer 文件负责创建控件，这里保存常用控件指针便于后续操作
-    searchEdit = ui->searchEdit;
-    tagFilterCombo = ui->tagFilterCombo;
-    searchResultView = ui->searchResultView;
-    noteTreeView = ui->noteTreeView;
-    titleEdit = ui->titleEdit;
-    tagEdit = ui->tagEdit;
-    markdownEditor = ui->markdownEditor;
-    previewBrowser = ui->previewBrowser;
-
     // 让编辑区和预览区占用较多空间
     ui->mainSplitter->setStretchFactor(0, 1);
     ui->mainSplitter->setStretchFactor(1, 2);
@@ -122,7 +99,7 @@ void MainWindow::setupInterface()
     ui->mainSplitter->setSizes({220, 470, 470});
 
     // 设置源码编辑器中制表符的显示宽度
-    markdownEditor->setTabStopDistance(32);
+    ui->markdownEditor->setTabStopDistance(32);
 
     // 状态栏右侧常驻显示当前字符数
     wordCountLabel = new QLabel(QStringLiteral("字符数: 0"), this);
@@ -188,10 +165,10 @@ void MainWindow::setupActions()
     editMenu->addAction(deleteAction);
 
     // 树视图使用同一组 QAction 生成右键菜单
-    noteTreeView->setContextMenuPolicy(Qt::ActionsContextMenu);
-    noteTreeView->addAction(renameAction);
-    noteTreeView->addAction(moveAction);
-    noteTreeView->addAction(deleteAction);
+    ui->noteTreeView->setContextMenuPolicy(Qt::ActionsContextMenu);
+    ui->noteTreeView->addAction(renameAction);
+    ui->noteTreeView->addAction(moveAction);
+    ui->noteTreeView->addAction(deleteAction);
 }
 
 void MainWindow::setupStyle()
@@ -199,7 +176,7 @@ void MainWindow::setupStyle()
     // 使用系统自带的等宽字体显示 Markdown 源码
     QFont editorFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
     editorFont.setPointSize(11);
-    markdownEditor->setFont(editorFont);
+    ui->markdownEditor->setFont(editorFont);
 
     // 少量样式用于区分标题并改善输入框间距
     setStyleSheet(QStringLiteral(
@@ -212,11 +189,11 @@ void MainWindow::setupStyle()
 void MainWindow::updatePreview()
 {
     // QTextDocument 原生支持常见 Markdown 语法
-    previewBrowser->document()->setMarkdown(markdownEditor->toPlainText());
+    const QString content = ui->markdownEditor->toPlainText();
+    ui->previewBrowser->document()->setMarkdown(content);
 
     // 字符数包含空格和换行，计算方式直观且稳定
-    const int characterCount = markdownEditor->toPlainText().length();
-    wordCountLabel->setText(QStringLiteral("字符数: %1").arg(characterCount));
+    wordCountLabel->setText(QStringLiteral("字符数: %1").arg(content.length()));
 }
 
 void MainWindow::loadNotes()
@@ -229,8 +206,6 @@ void MainWindow::loadNotes()
     // 首次载入需要完整建立三个界面模型
     rebuildNoteTree();
     rebuildSearchIndex();
-    rebuildTagChoices();
-
     // 默认打开第一篇笔记，避免界面显示为空
     if (!storage.notes().isEmpty()) {
         loadNote(storage.notes().first().id);
@@ -244,16 +219,12 @@ void MainWindow::rebuildNoteTree()
     // 模型只创建一次，后续刷新时清除其中的旧节点
     if (noteTreeModel == nullptr) {
         noteTreeModel = new QStandardItemModel(this);
-        noteTreeView->setModel(noteTreeModel);
+        ui->noteTreeView->setModel(noteTreeModel);
     } else {
         noteTreeModel->clear();
     }
 
     noteTreeModel->setHorizontalHeaderLabels({QStringLiteral("笔记")});
-
-    // 全部标签表示不进行标签过滤
-    const QString selectedTag = tagFilterCombo == nullptr
-        ? QStringLiteral("全部标签") : tagFilterCombo->currentText();
 
     // 未分类节点始终存在，方便接收没有文件夹的笔记
     QStringList visibleFolders = storage.folders();
@@ -271,10 +242,7 @@ void MainWindow::rebuildNoteTree()
             const QString actualFolder = note.folder.isEmpty()
                 ? QStringLiteral("未分类") : note.folder;
 
-            // 选中具体标签时只显示含有该标签的笔记
-            const bool tagMatches = selectedTag == QStringLiteral("全部标签")
-                || selectedTag.isEmpty() || note.tags.contains(selectedTag);
-            if (actualFolder == folderName && tagMatches) {
+            if (actualFolder == folderName) {
                 QStandardItem *noteItem = new QStandardItem(note.title);
                 noteItem->setEditable(false);
                 noteItem->setData(NoteItem, ItemTypeRole);
@@ -286,7 +254,7 @@ void MainWindow::rebuildNoteTree()
         noteTreeModel->appendRow(folderItem);
     }
 
-    noteTreeView->expandAll();
+    ui->noteTreeView->expandAll();
 
     // 模型刷新后尽量恢复用户正在编辑的笔记选择
     selectNoteInTree(currentNoteId);
@@ -322,110 +290,36 @@ void MainWindow::rebuildSearchIndex()
         searchProxyModel = new QSortFilterProxyModel(this);
         searchProxyModel->setFilterCaseSensitivity(Qt::CaseInsensitive);
         searchProxyModel->setFilterRole(SearchTextRole);
-        searchResultView->setModel(searchProxyModel);
+        ui->searchResultView->setModel(searchProxyModel);
     }
 
     searchProxyModel->setSourceModel(searchSourceModel);
 
     // 保持当前搜索框中的关键字继续生效
-    searchProxyModel->setFilterFixedString(searchEdit->text().trimmed());
-}
-
-QStandardItem *MainWindow::findNoteTreeItem(const QString &noteId) const
-{
-    if (noteTreeModel == nullptr || noteId.isEmpty()) {
-        return nullptr;
-    }
-
-    // 笔记树固定为文件夹和笔记两层
-    for (int folderRow = 0; folderRow < noteTreeModel->rowCount(); ++folderRow) {
-        QStandardItem *folderItem = noteTreeModel->item(folderRow);
-        for (int noteRow = 0; noteRow < folderItem->rowCount(); ++noteRow) {
-            QStandardItem *noteItem = folderItem->child(noteRow);
-            if (noteItem->data(NoteIdRole).toString() == noteId) {
-                return noteItem;
-            }
-        }
-    }
-
-    return nullptr;
-}
-
-QStandardItem *MainWindow::findSearchItem(const QString &noteId) const
-{
-    if (searchSourceModel == nullptr || noteId.isEmpty()) {
-        return nullptr;
-    }
-
-    // 搜索源模型是单层列表，只需检查每一行
-    for (int row = 0; row < searchSourceModel->rowCount(); ++row) {
-        QStandardItem *item = searchSourceModel->item(row);
-        if (item->data(NoteIdRole).toString() == noteId) {
-            return item;
-        }
-    }
-
-    return nullptr;
-}
-
-void MainWindow::updateNoteTreeItem(const Note &note)
-{
-    if (noteTreeModel == nullptr) {
-        return;
-    }
-
-    const QString selectedTag = tagFilterCombo->currentText();
-    const bool shouldBeVisible = selectedTag == QStringLiteral("全部标签")
-        || selectedTag.isEmpty() || note.tags.contains(selectedTag);
-    const QString folderName = note.folder.isEmpty()
-        ? QStringLiteral("未分类") : note.folder;
-    QStandardItem *oldItem = findNoteTreeItem(note.id);
-
-    // 标签过滤后不应显示时只移除这一条笔记
-    if (!shouldBeVisible) {
-        if (oldItem != nullptr && oldItem->parent() != nullptr) {
-            oldItem->parent()->removeRow(oldItem->row());
-        }
-        return;
-    }
-
-    // 文件夹没有变化时直接修改标题即可
-    if (oldItem != nullptr && oldItem->parent() != nullptr
-        && oldItem->parent()->text() == folderName) {
-        oldItem->setText(note.title);
-        selectNoteInTree(note.id);
-        return;
-    }
-
-    // 移动或重新显示前先移除旧位置的节点
-    if (oldItem != nullptr && oldItem->parent() != nullptr) {
-        oldItem->parent()->removeRow(oldItem->row());
-    }
-
-    // 找到目标文件夹并只添加当前笔记节点
-    for (int row = 0; row < noteTreeModel->rowCount(); ++row) {
-        QStandardItem *folderItem = noteTreeModel->item(row);
-        if (folderItem->text() == folderName) {
-            QStandardItem *noteItem = new QStandardItem(note.title);
-            noteItem->setEditable(false);
-            noteItem->setData(NoteItem, ItemTypeRole);
-            noteItem->setData(note.id, NoteIdRole);
-            folderItem->appendRow(noteItem);
-            noteTreeView->setCurrentIndex(noteItem->index());
-            return;
-        }
-    }
+    searchProxyModel->setFilterFixedString(ui->searchEdit->text().trimmed());
 }
 
 void MainWindow::updateSearchItem(const Note &note, const QString &content)
 {
-    if (searchSourceModel == nullptr) {
+    if (noteTreeModel == nullptr || searchSourceModel == nullptr) {
         return;
     }
 
-    QStandardItem *item = findSearchItem(note.id);
-    if (item == nullptr) {
-        item = new QStandardItem;
+    // Qt 的递归 match 可以直接找到树中的笔记，不需要手写双层遍历
+    const QModelIndexList treeMatches = noteTreeModel->match(
+        noteTreeModel->index(0, 0), NoteIdRole, note.id, 1,
+        Qt::MatchExactly | Qt::MatchRecursive);
+    if (!treeMatches.isEmpty()) {
+        noteTreeModel->setData(treeMatches.first(), note.title);
+    }
+
+    // 搜索模型同样按笔记编号找到并更新唯一条目
+    const QModelIndexList searchMatches = searchSourceModel->match(
+        searchSourceModel->index(0, 0), NoteIdRole, note.id, 1,
+        Qt::MatchExactly);
+    QStandardItem *item = searchMatches.isEmpty()
+        ? new QStandardItem : searchSourceModel->itemFromIndex(searchMatches.first());
+    if (searchMatches.isEmpty()) {
         item->setEditable(false);
         searchSourceModel->appendRow(item);
     }
@@ -441,39 +335,7 @@ void MainWindow::updateSearchItem(const Note &note, const QString &content)
     item->setData(searchableText, SearchTextRole);
 
     // 重新设置当前关键字可让结果数量立即反映这一条数据的变化
-    searchProxyModel->setFilterFixedString(searchEdit->text().trimmed());
-}
-
-void MainWindow::rebuildTagChoices()
-{
-    const QString previousChoice = tagFilterCombo->currentText();
-    QStringList allTags;
-
-    // 使用 contains 去重可以保持标签第一次出现时的自然顺序
-    for (const Note &note : storage.notes()) {
-        for (const QString &tag : note.tags) {
-            if (!tag.isEmpty() && !allTags.contains(tag)) {
-                allTags.append(tag);
-            }
-        }
-    }
-    allTags.sort(Qt::CaseInsensitive);
-
-    // 当前筛选标签暂时没有笔记时仍保留选择，避免整棵树切回全部
-    if (!previousChoice.isEmpty()
-        && previousChoice != QStringLiteral("全部标签")
-        && !allTags.contains(previousChoice)) {
-        allTags.append(previousChoice);
-    }
-
-    // 阻止刷新下拉内容时再次递归刷新笔记树
-    const QSignalBlocker blocker(tagFilterCombo);
-    tagFilterCombo->clear();
-    tagFilterCombo->addItem(QStringLiteral("全部标签"));
-    tagFilterCombo->addItems(allTags);
-
-    const int previousIndex = tagFilterCombo->findText(previousChoice);
-    tagFilterCombo->setCurrentIndex(previousIndex >= 0 ? previousIndex : 0);
+    searchProxyModel->setFilterFixedString(ui->searchEdit->text().trimmed());
 }
 
 void MainWindow::loadNote(const QString &noteId)
@@ -488,18 +350,17 @@ void MainWindow::loadNote(const QString &noteId)
         saveCurrentNote();
     }
 
-    loadingNote = true;
     currentNoteId = note->id;
 
-    // 标题和标签来自元数据文件
-    titleEdit->setText(note->title);
-    tagEdit->setText(note->tags.join(QStringLiteral(", ")));
+    // 阻止载入文本时把读取操作误判为用户编辑
+    const QSignalBlocker titleBlocker(ui->titleEdit);
+    const QSignalBlocker editorBlocker(ui->markdownEditor);
+    ui->titleEdit->setText(note->title);
 
     // 存储对象按需读取这一篇笔记的 Markdown 正文
-    markdownEditor->setPlainText(storage.readNoteContent(*note));
+    ui->markdownEditor->setPlainText(storage.readNoteContent(*note));
 
     setEditorEnabled(true);
-    loadingNote = false;
     updatePreview();
     selectNoteInTree(noteId);
     ui->statusbar->showMessage(QStringLiteral("已打开 %1").arg(note->title), 2000);
@@ -517,7 +378,7 @@ void MainWindow::openTreeItem(const QModelIndex &index)
 
 QString MainWindow::selectedFolderName() const
 {
-    const QModelIndex currentIndex = noteTreeView->currentIndex();
+    const QModelIndex currentIndex = ui->noteTreeView->currentIndex();
     if (!currentIndex.isValid()) {
         return QStringLiteral("未分类");
     }
@@ -537,7 +398,7 @@ QString MainWindow::selectedFolderName() const
 
 QString MainWindow::selectedNoteId() const
 {
-    const QModelIndex currentIndex = noteTreeView->currentIndex();
+    const QModelIndex currentIndex = ui->noteTreeView->currentIndex();
     if (!currentIndex.isValid()
         || currentIndex.data(ItemTypeRole).toInt() != NoteItem) {
         return QString();
@@ -548,10 +409,16 @@ QString MainWindow::selectedNoteId() const
 
 void MainWindow::selectNoteInTree(const QString &noteId)
 {
-    // 复用统一查找函数恢复当前选择
-    QStandardItem *noteItem = findNoteTreeItem(noteId);
-    if (noteItem != nullptr) {
-        noteTreeView->setCurrentIndex(noteItem->index());
+    if (noteTreeModel == nullptr || noteTreeModel->rowCount() == 0) {
+        return;
+    }
+
+    // Qt 模型直接递归匹配笔记编号并恢复选择
+    const QModelIndexList matches = noteTreeModel->match(
+        noteTreeModel->index(0, 0), NoteIdRole, noteId, 1,
+        Qt::MatchExactly | Qt::MatchRecursive);
+    if (!matches.isEmpty()) {
+        ui->noteTreeView->setCurrentIndex(matches.first());
     }
 }
 
@@ -584,7 +451,6 @@ void MainWindow::createNote()
     const QString newNoteId = note->id;
     rebuildNoteTree();
     updateSearchItem(*note, QString());
-    rebuildTagChoices();
     loadNote(newNoteId);
 }
 
@@ -617,46 +483,24 @@ void MainWindow::createFolder()
     ui->statusbar->showMessage(QStringLiteral("文件夹创建成功"), 2000);
 }
 
-void MainWindow::scheduleSave()
-{
-    // 程序主动载入内容时不需要触发保存计时器
-    if (loadingNote || currentNoteId.isEmpty()) {
-        return;
-    }
-
-    saveTimer->start();
-    ui->statusbar->showMessage(QStringLiteral("内容已修改，等待自动保存"));
-}
-
 void MainWindow::saveCurrentNote()
 {
     const Note *note = storage.findNote(currentNoteId);
-    if (note == nullptr || loadingNote) {
+    if (note == nullptr) {
         return;
     }
 
     saveTimer->stop();
 
     // 空标题自动恢复为未命名，保证树中始终有可见文字
-    QString title = titleEdit->text().trimmed();
+    QString title = ui->titleEdit->text().trimmed();
     if (title.isEmpty()) {
         title = QStringLiteral("未命名笔记");
     }
 
-    // 英文逗号和中文逗号都可以用于分隔多个标签
-    QString normalizedTags = tagEdit->text();
-    normalizedTags.replace(QChar(0xFF0C), QLatin1Char(','));
-    QStringList tags;
-    for (const QString &part : normalizedTags.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
-        const QString tag = part.trimmed();
-        if (!tag.isEmpty() && !tags.contains(tag)) {
-            tags.append(tag);
-        }
-    }
-
-    // 正文与 JSON 的实际写入统一交给存储对象
-    if (!storage.updateNote(currentNoteId, title, tags,
-                            markdownEditor->toPlainText())) {
+    // 标签功能已经从界面移除，存储层会原样保留旧 JSON 中的标签
+    const QString content = ui->markdownEditor->toPlainText();
+    if (!storage.updateNote(currentNoteId, title, content)) {
         ui->statusbar->showMessage(QStringLiteral("正文保存失败"), 3000);
         return;
     }
@@ -668,19 +512,16 @@ void MainWindow::saveCurrentNote()
     }
 
     // 自动保存只更新当前笔记对应的树节点和搜索条目
-    updateNoteTreeItem(*note);
-    updateSearchItem(*note, markdownEditor->toPlainText());
-    rebuildTagChoices();
+    updateSearchItem(*note, content);
     ui->statusbar->showMessage(QStringLiteral("已自动保存"), 1800);
 }
 
 void MainWindow::setEditorEnabled(bool enabled)
 {
     // 没有笔记时禁止输入，避免产生无处保存的内容
-    titleEdit->setEnabled(enabled);
-    tagEdit->setEnabled(enabled);
-    markdownEditor->setEnabled(enabled);
-    previewBrowser->setEnabled(enabled);
+    ui->titleEdit->setEnabled(enabled);
+    ui->markdownEditor->setEnabled(enabled);
+    ui->previewBrowser->setEnabled(enabled);
 }
 
 void MainWindow::updateSearch(const QString &keyword)
@@ -693,7 +534,7 @@ void MainWindow::updateSearch(const QString &keyword)
     searchProxyModel->setFilterFixedString(trimmedKeyword);
 
     // 没有关键字时隐藏结果列表，把空间还给笔记树
-    searchResultView->setVisible(!trimmedKeyword.isEmpty());
+    ui->searchResultView->setVisible(!trimmedKeyword.isEmpty());
     if (!trimmedKeyword.isEmpty()) {
         ui->statusbar->showMessage(
             QStringLiteral("找到 %1 篇笔记").arg(searchProxyModel->rowCount()));
@@ -711,15 +552,9 @@ void MainWindow::openSearchResult(const QModelIndex &index)
     }
 }
 
-void MainWindow::filterTreeByTag()
-{
-    // 标签改变后重新创建可见树节点即可
-    rebuildNoteTree();
-}
-
 QString MainWindow::safeExportFileName() const
 {
-    QString fileName = titleEdit->text().trimmed();
+    QString fileName = ui->titleEdit->text().trimmed();
     if (fileName.isEmpty()) {
         fileName = QStringLiteral("未命名笔记");
     }
@@ -761,7 +596,7 @@ void MainWindow::exportCurrentNoteAsHtml()
         return;
     }
 
-    outputFile.write(previewBrowser->document()->toHtml().toUtf8());
+    outputFile.write(ui->previewBrowser->document()->toHtml().toUtf8());
     if (!outputFile.commit()) {
         QMessageBox::warning(this, QStringLiteral("导出失败"),
                              QStringLiteral("文件保存时发生错误"));
@@ -800,10 +635,10 @@ void MainWindow::exportCurrentNoteAsPdf()
     printer.setOutputFormat(QPrinter::PdfFormat);
     printer.setOutputFileName(filePath);
     printer.setPageSize(QPageSize(QPageSize::A4));
-    printer.setDocName(titleEdit->text().trimmed());
+    printer.setDocName(ui->titleEdit->text().trimmed());
 
     // 直接打印预览文档可以保留标题、列表、表格等排版
-    previewBrowser->document()->print(&printer);
+    ui->previewBrowser->document()->print(&printer);
 
     if (!QFileInfo::exists(filePath)) {
         QMessageBox::warning(this, QStringLiteral("导出失败"),
@@ -816,7 +651,7 @@ void MainWindow::exportCurrentNoteAsPdf()
 
 void MainWindow::renameSelectedItem()
 {
-    const QModelIndex currentIndex = noteTreeView->currentIndex();
+    const QModelIndex currentIndex = ui->noteTreeView->currentIndex();
     if (!currentIndex.isValid()) {
         QMessageBox::information(this, QStringLiteral("提示"),
                                  QStringLiteral("请先选择笔记或文件夹"));
@@ -848,9 +683,8 @@ void MainWindow::renameSelectedItem()
 
         // 同步更新当前打开笔记的标题输入框
         if (note->id == currentNoteId) {
-            loadingNote = true;
-            titleEdit->setText(newName);
-            loadingNote = false;
+            const QSignalBlocker blocker(ui->titleEdit);
+            ui->titleEdit->setText(newName);
         }
     } else if (itemType == FolderItem) {
         // 固定的未分类节点不能重命名
@@ -880,7 +714,7 @@ void MainWindow::renameSelectedItem()
 
 void MainWindow::deleteSelectedItem()
 {
-    const QModelIndex currentIndex = noteTreeView->currentIndex();
+    const QModelIndex currentIndex = ui->noteTreeView->currentIndex();
     if (!currentIndex.isValid()) {
         QMessageBox::information(this, QStringLiteral("提示"),
                                  QStringLiteral("请先选择笔记或文件夹"));
@@ -933,18 +767,15 @@ void MainWindow::deleteSelectedItem()
 
     rebuildNoteTree();
     rebuildSearchIndex();
-    rebuildTagChoices();
-
     // 当前笔记被删除后自动打开剩余的第一篇
     if (currentNoteId.isEmpty()) {
         if (!storage.notes().isEmpty()) {
             loadNote(storage.notes().first().id);
         } else {
-            loadingNote = true;
-            titleEdit->clear();
-            tagEdit->clear();
-            markdownEditor->clear();
-            loadingNote = false;
+            const QSignalBlocker titleBlocker(ui->titleEdit);
+            const QSignalBlocker editorBlocker(ui->markdownEditor);
+            ui->titleEdit->clear();
+            ui->markdownEditor->clear();
             setEditorEnabled(false);
         }
     }

@@ -28,9 +28,9 @@ public:
     // 创建笔记并同时生成空 Markdown 文件
     const Note *addNote(const QString &title, const QString &folder);
 
-    // 更新一篇笔记的标题、标签和正文
+    // 更新一篇笔记的标题和正文
     bool updateNote(const QString &noteId, const QString &title,
-                    const QStringList &tags, const QString &content);
+                    const QString &content);
 
     // 修改一篇笔记的标题
     bool renameNote(const QString &noteId, const QString &newTitle);
