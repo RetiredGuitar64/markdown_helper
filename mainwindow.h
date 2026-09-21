@@ -8,7 +8,6 @@
 class QCloseEvent;
 class QLabel;
 class QSortFilterProxyModel;
-class QStandardItem;
 class QStandardItemModel;
 class QTimer;
 

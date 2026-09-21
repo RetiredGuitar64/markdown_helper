@@ -16,6 +16,7 @@ qt_add_executable(markdown_helper
     notestorage.cpp
     notestorage.h
     mainwindow.cpp
+    mainwindow_notes.cpp
     mainwindow.h
     mainwindow.ui
 )
